@@ -14,7 +14,7 @@ type Chunk struct {
 }
 
 type FileChange struct {
-	Timestame time.time
+	Timestamp time.Time
 	Contents  []byte
 }
 
