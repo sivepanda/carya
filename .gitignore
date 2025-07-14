@@ -29,5 +29,10 @@ go.work.sum
 
 # Editor/IDE
 # .idea/
-# .vscode/
+.vscode/
 .gemini/
+.gurt/
+
+
+# Built test files
+gurt

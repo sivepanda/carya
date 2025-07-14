@@ -19,6 +19,8 @@ type Watcher struct {
 	stopCh    chan struct{}
 }
 
+// test
+
 func New(handler FileChangeHandler) (*Watcher, error) {
 	fsWatcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -113,6 +115,15 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 			if w.handler != nil {
 				w.handler.OnFileChange(event.Name, contents)
 			}
+		}
+	}
+
+	// Handle directory/file removal
+	if event.Op&fsnotify.Remove == fsnotify.Remove {
+		if err := w.fsWatcher.Remove(event.Name); err != nil {
+			log.Printf("Note: Could not remove %s from watcher: %v", event.Name, err)
+		} else {
+			log.Println("Removed from watch:", event.Name)
 		}
 	}
 }
