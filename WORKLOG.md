@@ -19,3 +19,10 @@ Internal (to be shared) datastore for chunks and other save data changes so that
 
 ## internal/watcher
 Defines when chunks are made, changes to system files, etc
+
+
+# TODO
+
+1. Still need to rework `watcher` to use the .gitignore as a basis for its tracking
+2. Need to roll in and implement some sort of databasing, probably sqlite (store)
+3. Build housekeeping engine - reads for common package manager configs + optionally can be configured
