@@ -13,6 +13,8 @@ import (
 	"gurt/internal/watcher"
 )
 
+// lorem ipsum dolor
+
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize a new Gurt repository.",
