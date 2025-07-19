@@ -33,6 +33,4 @@ go.work.sum
 .gemini/
 .gurt/
 
-
-# Built test files
-gurt
+/gurt

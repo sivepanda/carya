@@ -1,0 +1,169 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/spf13/cobra"
+	"gurt/internal/housekeeping"
+)
+
+var housekeepingCmd = &cobra.Command{
+	Use:   "housekeeping",
+	Short: "Manage housekeeping commands",
+	Long:  `Manage housekeeping commands that run automatically after git operations like pull and checkout.`,
+}
+
+var housekeepingAddCmd = &cobra.Command{
+	Use:   "add [command]",
+	Short: "Add a housekeeping command",
+	Long:  `Add a housekeeping command to run after git operations.`,
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		command := args[0]
+
+		postPull, _ := cmd.Flags().GetBool("post-pull")
+		postCheckout, _ := cmd.Flags().GetBool("post-checkout")
+		workingDir, _ := cmd.Flags().GetString("working-dir")
+		description, _ := cmd.Flags().GetString("description")
+
+		if !postPull && !postCheckout {
+			fmt.Println("Error: Must specify either --post-pull or --post-checkout")
+			return
+		}
+
+		if postPull && postCheckout {
+			fmt.Println("Error: Cannot specify both --post-pull and --post-checkout")
+			return
+		}
+
+		config, err := housekeeping.LoadConfig()
+		if err != nil {
+			fmt.Printf("Error loading config: %v\n", err)
+			return
+		}
+
+		if workingDir == "" {
+			workingDir = "."
+		}
+
+		if description == "" {
+			description = command
+		}
+
+		var category string
+		if postPull {
+			category = "post-pull"
+		} else {
+			category = "post-checkout"
+		}
+
+		if err := config.AddCommand(category, command, workingDir, description); err != nil {
+			fmt.Printf("Error adding command: %v\n", err)
+			return
+		}
+
+		if err := config.Save(); err != nil {
+			fmt.Printf("Error saving config: %v\n", err)
+			return
+		}
+
+		fmt.Printf("Added %s command: %s\n", category, command)
+	},
+}
+
+var housekeepingListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all housekeeping commands",
+	Long:  `List all configured housekeeping commands by category.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		config, err := housekeeping.LoadConfig()
+		if err != nil {
+			fmt.Printf("Error loading config: %v\n", err)
+			return
+		}
+
+		categories := []string{"post-pull", "post-checkout"}
+
+		for _, category := range categories {
+			commands, err := config.GetCommands(category)
+			if err != nil {
+				fmt.Printf("Error getting %s commands: %v\n", category, err)
+				continue
+			}
+
+			fmt.Printf("\n%s commands:\n", strings.Title(strings.ReplaceAll(category, "-", " ")))
+			if len(commands) == 0 {
+				fmt.Println("  (none)")
+			} else {
+				for i, cmd := range commands {
+					fmt.Printf("  %d. %s\n", i+1, cmd.Description)
+					fmt.Printf("     Command: %s\n", cmd.Command)
+					if cmd.WorkingDir != "." && cmd.WorkingDir != "" {
+						fmt.Printf("     Working Dir: %s\n", cmd.WorkingDir)
+					}
+				}
+			}
+		}
+	},
+}
+
+var housekeepingEditCmd = &cobra.Command{
+	Use:   "edit",
+	Short: "Edit the housekeeping configuration file",
+	Long:  `Open the housekeeping configuration file in your preferred editor.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := housekeeping.OpenConfigInEditor(); err != nil {
+			fmt.Printf("Error opening config in editor: %v\n", err)
+			return
+		}
+	},
+}
+
+var housekeepingRunCmd = &cobra.Command{
+	Use:   "run [category]",
+	Short: "Run housekeeping commands for a specific category",
+	Long:  `Run housekeeping commands for a specific category (post-pull or post-checkout).`,
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		category := args[0]
+		autoApprove, _ := cmd.Flags().GetBool("auto")
+
+		if category != "post-pull" && category != "post-checkout" {
+			fmt.Printf("Error: Invalid category '%s'. Must be 'post-pull' or 'post-checkout'\n", category)
+			return
+		}
+
+		config, err := housekeeping.LoadConfig()
+		if err != nil {
+			fmt.Printf("Error loading config: %v\n", err)
+			return
+		}
+
+		executor := housekeeping.NewExecutor(config)
+		if err := executor.ExecuteCategory(category, autoApprove); err != nil {
+			fmt.Printf("Error executing %s commands: %v\n", category, err)
+			return
+		}
+	},
+}
+
+func init() {
+	// Add flags to the add command
+	housekeepingAddCmd.Flags().Bool("post-pull", false, "Add command to post-pull category")
+	housekeepingAddCmd.Flags().Bool("post-checkout", false, "Add command to post-checkout category")
+	housekeepingAddCmd.Flags().StringP("working-dir", "d", ".", "Working directory for the command")
+	housekeepingAddCmd.Flags().StringP("description", "m", "", "Description of the command")
+
+	// Add flags to the run command
+	housekeepingRunCmd.Flags().Bool("auto", false, "Run commands without confirmation")
+
+	// Add subcommands to housekeeping
+	housekeepingCmd.AddCommand(housekeepingAddCmd)
+	housekeepingCmd.AddCommand(housekeepingListCmd)
+	housekeepingCmd.AddCommand(housekeepingEditCmd)
+	housekeepingCmd.AddCommand(housekeepingRunCmd)
+
+	// Add housekeeping to root command
+	rootCmd.AddCommand(housekeepingCmd)
+}

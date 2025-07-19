@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/fsnotify/fsnotify"
@@ -159,13 +160,7 @@ func (w *Watcher) matchesRule(path, rule string, isDir bool) bool {
 
 	// Check if any parent directory matches
 	parts := strings.Split(path, "/")
-	for i := range parts {
-		if parts[i] == rule {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(parts, rule)
 }
 
 func (w *Watcher) handleEvent(event fsnotify.Event) {
@@ -242,14 +237,7 @@ func (w *Watcher) shouldTrackFile(path string) bool {
 		".mp3", ".mp4", ".avi", ".mov", ".wav", ".pdf", ".zip", ".tar", ".gz",
 	}
 
-	for _, binary := range binaryExts {
-		if ext == binary {
-			return false
-		}
-	}
-
-	// Track text-based files by default (unless explicitly ignored)
-	return true
+	return !slices.Contains(binaryExts, ext)
 }
 
 // Legacy function for backward compatibility
