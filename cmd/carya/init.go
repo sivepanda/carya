@@ -8,28 +8,29 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"carya/internal/core"
+	"carya/internal/watcher"
+
 	"github.com/spf13/cobra"
-	"gurt/internal/core"
-	"gurt/internal/watcher"
 )
 
 // lorem ipsum dolor
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize a new Gurt repository.",
-	Long:  `Initializes a new Gurt repository in the current directory and starts watching for file changes.`,
+	Short: "Initialize a new Carya repository.",
+	Long:  `Initializes a new Carya repository in the current directory and starts watching for file changes.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Initializing Gurt repository...")
+		fmt.Println("Initializing Carya repository...")
 
-		// Create .gurt directory for storing data
-		gurtDir := ".gurt"
-		if err := os.MkdirAll(gurtDir, 0755); err != nil {
-			log.Fatal("Failed to create .gurt directory:", err)
+		// Create .carya directory for storing data
+		caryaDir := ".carya"
+		if err := os.MkdirAll(caryaDir, 0755); err != nil {
+			log.Fatal("Failed to create .carya directory:", err)
 		}
 
 		// Initialize the core engine
-		dbPath := filepath.Join(gurtDir, "chunks.db")
+		dbPath := filepath.Join(caryaDir, "chunks.db")
 		engine, err := core.NewEngine(dbPath)
 		if err != nil {
 			log.Fatal("Failed to initialize engine:", err)
@@ -50,7 +51,7 @@ var initCmd = &cobra.Command{
 		}
 		defer fileWatcher.Stop()
 
-		fmt.Println("Gurt is now watching for file changes...")
+		fmt.Println("Carya is now watching for file changes...")
 		fmt.Println("Press Ctrl+C to stop")
 
 		// Wait for interrupt signal
@@ -58,7 +59,7 @@ var initCmd = &cobra.Command{
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 		<-c
 
-		fmt.Println("\nShutting down Gurt...")
+		fmt.Println("\nShutting down Carya...")
 	},
 }
 

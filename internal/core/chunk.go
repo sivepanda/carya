@@ -1,8 +1,8 @@
 package core
 
 import (
-	"gurt/internal/chunk"
-	"gurt/internal/store"
+	"carya/internal/chunk"
+	"carya/internal/store"
 	"log"
 	"time"
 )

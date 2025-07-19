@@ -38,12 +38,12 @@ func GetConfigPath() (string, error) {
 		return "", fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	gurtDir := filepath.Join(wd, ".gurt")
-	if _, err := os.Stat(gurtDir); os.IsNotExist(err) {
-		return "", fmt.Errorf(".gurt directory not found - run 'gurt init' first")
+	caryaDir := filepath.Join(wd, ".carya")
+	if _, err := os.Stat(caryaDir); os.IsNotExist(err) {
+		return "", fmt.Errorf(".carya directory not found - run 'carya init' first")
 	}
 
-	return filepath.Join(gurtDir, ConfigFile), nil
+	return filepath.Join(caryaDir, ConfigFile), nil
 }
 
 func LoadConfig() (*Config, error) {

@@ -8,11 +8,11 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "gurt",
-	Short: "Gurt is a next-gen version control system.",
+	Use:   "carya",
+	Short: "Carya is a next-gen version control system.",
 	Long:  `A fast and powerful version control system built with a focus on developer experience and collaboration.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Gurt is running. Use 'gurt --help' for a list of commands.")
+		fmt.Println("Carya is running. Use 'carya --help' for a list of commands.")
 	},
 }
 

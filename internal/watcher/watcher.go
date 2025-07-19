@@ -30,10 +30,9 @@ func New(handler FileChangeHandler) (*Watcher, error) {
 	}
 
 	return &Watcher{
-		fsWatcher:      fsWatcher,
-		handler:        handler,
-		stopCh:         make(chan struct{}),
-		gitignoreRules: []string{},
+		fsWatcher: fsWatcher,
+		handler:   handler,
+		stopCh:    make(chan struct{}),
 	}, nil
 }
 
@@ -41,41 +40,18 @@ func (w *Watcher) Start(watchDir string) error {
 	w.watchDir = watchDir
 	w.loadGitignoreRules()
 
-	// Start listening for events.
-	go func() {
-		for {
-			select {
-			case event, ok := <-w.fsWatcher.Events:
-				if !ok {
-					return
-				}
+	go w.watchLoop()
 
-				w.handleEvent(event)
-
-			case err, ok := <-w.fsWatcher.Errors:
-				if !ok {
-					return
-				}
-				log.Println("Watcher ERROR:", err)
-			case <-w.stopCh:
-				return
-			}
-		}
-	}()
-
-	// Walk the directory tree and add each directory to the watcher.
 	log.Println("Walking directory:", watchDir)
 	return filepath.Walk(watchDir, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip .git directories and other common ignore patterns
-		if fi.IsDir() && w.shouldSkipDir(path) {
-			return filepath.SkipDir
-		}
-
 		if fi.IsDir() {
+			if w.shouldIgnore(path, true) {
+				return filepath.SkipDir
+			}
 			if err := w.fsWatcher.Add(path); err != nil {
 				return err
 			}
@@ -92,15 +68,34 @@ func (w *Watcher) Stop() {
 	}
 }
 
+func (w *Watcher) watchLoop() {
+	for {
+		select {
+		case event, ok := <-w.fsWatcher.Events:
+			if !ok {
+				return
+			}
+			w.handleEvent(event)
+
+		case err, ok := <-w.fsWatcher.Errors:
+			if !ok {
+				return
+			}
+			log.Println("Watcher ERROR:", err)
+
+		case <-w.stopCh:
+			return
+		}
+	}
+}
+
 func (w *Watcher) loadGitignoreRules() {
-	// Always add .git to ignore rules
-	w.gitignoreRules = []string{".git/"}
+	// Default ignore rules
+	w.gitignoreRules = []string{".git/", "node_modules/", ".vscode/", ".idea/"}
 
 	gitignorePath := filepath.Join(w.watchDir, ".gitignore")
 	file, err := os.Open(gitignorePath)
 	if err != nil {
-		log.Printf("No .gitignore found at %s, using default rules", gitignorePath)
-		w.gitignoreRules = append(w.gitignoreRules, "node_modules/", ".vscode/", ".idea/")
 		return
 	}
 	defer file.Close()
@@ -112,14 +107,16 @@ func (w *Watcher) loadGitignoreRules() {
 			w.gitignoreRules = append(w.gitignoreRules, line)
 		}
 	}
-
-	if err := scanner.Err(); err != nil {
-		log.Printf("Error reading .gitignore: %v", err)
-	}
 }
-func (w *Watcher) matchesGitignore(path string, isDir bool) bool {
+
+func (w *Watcher) shouldIgnore(path string, isDir bool) bool {
+	relPath, err := filepath.Rel(w.watchDir, path)
+	if err != nil {
+		return false
+	}
+
 	for _, rule := range w.gitignoreRules {
-		if w.matchesRule(path, rule, isDir) {
+		if w.matchesRule(relPath, rule, isDir) {
 			return true
 		}
 	}
@@ -127,7 +124,7 @@ func (w *Watcher) matchesGitignore(path string, isDir bool) bool {
 }
 
 func (w *Watcher) matchesRule(path, rule string, isDir bool) bool {
-	// Handle directory-specific rules (ending with /)
+	// Directory-specific rules
 	if strings.HasSuffix(rule, "/") {
 		if !isDir {
 			return false
@@ -135,123 +132,61 @@ func (w *Watcher) matchesRule(path, rule string, isDir bool) bool {
 		rule = strings.TrimSuffix(rule, "/")
 	}
 
-	// Handle glob patterns
-	if strings.Contains(rule, "*") {
-		matched, _ := filepath.Match(rule, path)
-		if matched {
-			return true
-		}
-		// Also check if any parent directory matches
-		dir := filepath.Dir(path)
-		for dir != "." && dir != "/" {
-			matched, _ := filepath.Match(rule, filepath.Base(dir))
-			if matched {
-				return true
-			}
-			dir = filepath.Dir(dir)
-		}
-		return false
-	}
-
-	// Exact match or prefix match
-	if path == rule || strings.HasPrefix(path, rule+"/") {
+	// Simple glob or exact match
+	if matched, _ := filepath.Match(rule, path); matched {
 		return true
 	}
 
-	// Check if any parent directory matches
+	// Check if any part of the path matches
 	parts := strings.Split(path, "/")
 	return slices.Contains(parts, rule)
 }
 
 func (w *Watcher) handleEvent(event fsnotify.Event) {
-	// Handle file modifications and writes
-	if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
+	if event.Op&(fsnotify.Write|fsnotify.Create) != 0 {
+		log.Print("test")
 		fi, err := os.Stat(event.Name)
 		if err != nil {
 			return
 		}
 
-		// If it's a new directory, add it to the watcher (unless it should be skipped)
 		if fi.IsDir() && event.Op&fsnotify.Create == fsnotify.Create {
-			if !w.shouldSkipDir(event.Name) {
-				if err := w.fsWatcher.Add(event.Name); err != nil {
-					log.Println("ERROR adding directory to watcher:", err)
-				} else {
-					log.Println("Added to watch:", event.Name)
-				}
+			if !w.shouldIgnore(event.Name, true) {
+				w.fsWatcher.Add(event.Name)
+				log.Println("Added to watch:", event.Name)
 			}
 			return
 		}
 
-		// If it's a file and we should track it, read contents and notify handler
 		if !fi.IsDir() && w.shouldTrackFile(event.Name) {
+			log.Print("test1")
+			//test
 			contents, err := os.ReadFile(event.Name)
 			if err != nil {
-				log.Printf("Error reading file %s: %v", event.Name, err)
 				return
 			}
-
 			if w.handler != nil {
 				w.handler.OnFileChange(event.Name, contents)
 			}
 		}
 	}
 
-	// Handle directory/file removal
 	if event.Op&fsnotify.Remove == fsnotify.Remove {
-		if err := w.fsWatcher.Remove(event.Name); err != nil {
-			log.Printf("Note: Could not remove %s from watcher: %v", event.Name, err)
-		} else {
-			log.Println("Removed from watch:", event.Name)
-		}
+		w.fsWatcher.Remove(event.Name)
 	}
-}
-
-func (w *Watcher) shouldSkipDir(path string) bool {
-	relPath, err := filepath.Rel(w.watchDir, path)
-	if err != nil {
-		return false
-	}
-
-	return w.matchesGitignore(relPath, true)
 }
 
 func (w *Watcher) shouldTrackFile(path string) bool {
-	relPath, err := filepath.Rel(w.watchDir, path)
-	if err != nil {
+	if w.shouldIgnore(path, false) {
 		return false
 	}
 
-	// If file matches gitignore patterns, don't track it
-	if w.matchesGitignore(relPath, false) {
-		return false
-	}
-
-	// Track common source code files (exclusion-based approach)
+	// Skip binary files
 	ext := strings.ToLower(filepath.Ext(path))
-
-	// Skip binary and generated files
 	binaryExts := []string{
-		".exe", ".dll", ".so", ".dylib", ".bin", ".out", ".o", ".a",
-		".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".svg",
-		".mp3", ".mp4", ".avi", ".mov", ".wav", ".pdf", ".zip", ".tar", ".gz",
+		".exe", ".dll", ".so", ".bin", ".out", ".o", ".a",
+		".jpg", ".jpeg", ".png", ".gif", ".pdf", ".zip", ".tar", ".gz",
 	}
 
 	return !slices.Contains(binaryExts, ext)
-}
-
-// Legacy function for backward compatibility
-func Start(watchDir string) {
-	watcher, err := New(nil)
-	if err != nil {
-		log.Fatal("ERROR creating watcher:", err)
-	}
-	defer watcher.Stop()
-
-	if err := watcher.Start(watchDir); err != nil {
-		log.Fatal("ERROR starting watcher:", err)
-	}
-
-	// Block main goroutine forever.
-	<-make(chan struct{})
 }

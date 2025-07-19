@@ -1,4 +1,4 @@
-module gurt
+module carya
 
 go 1.24.3
 

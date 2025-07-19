@@ -1,8 +1,8 @@
 package store
 
 import (
+	"carya/internal/chunk"
 	"database/sql"
-	"gurt/internal/chunk"
 
 	_ "github.com/mattn/go-sqlite3"
 )
