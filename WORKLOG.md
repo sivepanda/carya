@@ -4,8 +4,8 @@ Contains external executables, so pretty much just the main method
 # internal
 Contains business logic, each system is in its own package.
 
-## internal/core
-Core stuff, probably will rename to commands or something and this will just house each of the commands that Cobra can call
+## internal/engine
+Main engine and coordination logic that orchestrates chunk management, storage, and file watching
 
 ## internal/chunk
 Defines what chunks are, their schema, what needs to be saved and tracked, etc
@@ -26,6 +26,5 @@ Defines and handles actions taken after a pull or switching branches -- things s
 
 # TODO
 
-1. Still need to rework `watcher` to use the .gitignore as a basis for its tracking
-2. Need to roll in and implement some sort of databasing, probably sqlite (store)
-3. Improve housekeeping engine - presently all configs need to be registered, make it smarter
+1. Improve housekeeping engine - presently all configs need to be registered, make it smarter
+2. Make things look nicer. Implement LipGloss, BubbleTea.

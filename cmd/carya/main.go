@@ -1,3 +1,5 @@
+// Package main provides the command-line interface for Carya, a next-generation
+// version control system focused on developer experience and collaboration.
 package main
 
 import (
@@ -16,6 +18,8 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+// Execute runs the root command and handles any errors that occur during execution.
+// It prints errors to stderr and exits with code 1 if an error occurs.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -23,6 +27,7 @@ func Execute() {
 	}
 }
 
+// main is the entry point for the Carya CLI application.
 func main() {
 	Execute()
 }

@@ -8,21 +8,25 @@ import (
 )
 
 const (
+	// DefaultFlushTimeout is the default time after which inactive chunks are flushed.
 	DefaultFlushTimeout = 15 * time.Minute
 )
 
+// UnifiedStrategy implements a chunking strategy that groups file changes by time periods.
 type UnifiedStrategy struct {
-	mu           sync.RWMutex
-	activeChunks map[string]*activeChunk
-	flushTimeout time.Duration
+	mu           sync.RWMutex            // Protects concurrent access
+	activeChunks map[string]*activeChunk // Active chunks by file path
+	flushTimeout time.Duration           // Time before chunks are considered stale
 }
 
+// activeChunk tracks an in-progress chunk for a file.
 type activeChunk struct {
-	chunk       *Chunk
-	lastUpdate  time.Time
-	initialHash string
+	chunk       *Chunk    // The chunk being built
+	lastUpdate  time.Time // When this chunk was last updated
+	initialHash string    // Hash of the initial file content
 }
 
+// NewUnifiedStrategy creates a new unified chunking strategy with default settings.
 func NewUnifiedStrategy() *UnifiedStrategy {
 	return &UnifiedStrategy{
 		activeChunks: make(map[string]*activeChunk),
@@ -30,6 +34,7 @@ func NewUnifiedStrategy() *UnifiedStrategy {
 	}
 }
 
+// OnFileChange processes a file change event, creating or updating chunks as needed.
 func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -62,6 +67,7 @@ func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 	active.chunk.Hash = ChunkHash(contentHash)
 }
 
+// FlushStaleChunks returns chunks that haven't been updated within the flush timeout.
 func (s *UnifiedStrategy) FlushStaleChunks(now time.Time) []Chunk {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -78,6 +84,7 @@ func (s *UnifiedStrategy) FlushStaleChunks(now time.Time) []Chunk {
 	return flushed
 }
 
+// ForceFlush immediately creates a chunk for the specified file path.
 func (s *UnifiedStrategy) ForceFlush(filePath string) *Chunk {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -95,11 +102,13 @@ func (s *UnifiedStrategy) ForceFlush(filePath string) *Chunk {
 	return &chunk
 }
 
+// hashContent generates a SHA256 hash of the given content.
 func (s *UnifiedStrategy) hashContent(content []byte) string {
 	hash := sha256.Sum256(content)
 	return fmt.Sprintf("%x", hash)
 }
 
+// generateDiff creates a simple diff representation for a chunk.
 func (s *UnifiedStrategy) generateDiff(chunk *Chunk) string {
 	return fmt.Sprintf("File: %s\nTime: %s - %s\nHash: %s",
 		chunk.FilePath,

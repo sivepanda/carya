@@ -1,7 +1,5 @@
 package main
 
-//test save
-
 import (
 	"fmt"
 	"strings"

@@ -1,3 +1,5 @@
+// Package watcher provides file system monitoring capabilities for the Carya
+// version control system, tracking file changes and respecting gitignore rules.
 package watcher
 
 import (
@@ -11,18 +13,23 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// FileChangeHandler defines the interface for handling file change events.
 type FileChangeHandler interface {
+	// OnFileChange is called when a tracked file is modified.
 	OnFileChange(path string, contents []byte)
 }
 
+// Watcher monitors file system changes in a directory tree, respecting gitignore rules
+// and filtering out binary files and unwanted directories.
 type Watcher struct {
-	fsWatcher      *fsnotify.Watcher
-	handler        FileChangeHandler
-	stopCh         chan struct{}
-	gitignoreRules []string
-	watchDir       string
+	fsWatcher      *fsnotify.Watcher // Underlying file system watcher
+	handler        FileChangeHandler // Handler for file change events
+	stopCh         chan struct{}     // Channel to signal shutdown
+	gitignoreRules []string          // Rules for ignoring files/directories
+	watchDir       string            // Root directory being watched
 }
 
+// New creates a new file system watcher with the specified change handler.
 func New(handler FileChangeHandler) (*Watcher, error) {
 	fsWatcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -36,6 +43,8 @@ func New(handler FileChangeHandler) (*Watcher, error) {
 	}, nil
 }
 
+// Start begins watching the specified directory tree for file changes.
+// It loads gitignore rules and recursively adds directories to the watch list.
 func (w *Watcher) Start(watchDir string) error {
 	w.watchDir = watchDir
 	w.loadGitignoreRules()
@@ -61,6 +70,7 @@ func (w *Watcher) Start(watchDir string) error {
 	})
 }
 
+// Stop gracefully shuts down the watcher and closes all resources.
 func (w *Watcher) Stop() {
 	close(w.stopCh)
 	if w.fsWatcher != nil {
@@ -68,6 +78,7 @@ func (w *Watcher) Stop() {
 	}
 }
 
+// watchLoop runs in a separate goroutine and processes file system events.
 func (w *Watcher) watchLoop() {
 	for {
 		select {
@@ -89,6 +100,7 @@ func (w *Watcher) watchLoop() {
 	}
 }
 
+// loadGitignoreRules loads ignore rules from .gitignore file and adds default rules.
 func (w *Watcher) loadGitignoreRules() {
 	// Default ignore rules
 	w.gitignoreRules = []string{".git/", "node_modules/", ".vscode/", ".idea/"}
@@ -109,6 +121,7 @@ func (w *Watcher) loadGitignoreRules() {
 	}
 }
 
+// shouldIgnore determines if a path should be ignored based on gitignore rules.
 func (w *Watcher) shouldIgnore(path string, isDir bool) bool {
 	relPath, err := filepath.Rel(w.watchDir, path)
 	if err != nil {
@@ -123,6 +136,7 @@ func (w *Watcher) shouldIgnore(path string, isDir bool) bool {
 	return false
 }
 
+// matchesRule checks if a path matches a specific gitignore rule.
 func (w *Watcher) matchesRule(path, rule string, isDir bool) bool {
 	// Directory-specific rules
 	if strings.HasSuffix(rule, "/") {
@@ -142,6 +156,7 @@ func (w *Watcher) matchesRule(path, rule string, isDir bool) bool {
 	return slices.Contains(parts, rule)
 }
 
+// handleEvent processes a file system event and triggers appropriate actions.
 func (w *Watcher) handleEvent(event fsnotify.Event) {
 	if event.Op&(fsnotify.Write|fsnotify.Create) != 0 {
 		log.Print("test")
@@ -159,8 +174,6 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 		}
 
 		if !fi.IsDir() && w.shouldTrackFile(event.Name) {
-			log.Print("test1")
-			//test
 			contents, err := os.ReadFile(event.Name)
 			if err != nil {
 				return
@@ -176,6 +189,8 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	}
 }
 
+// shouldTrackFile determines if a file should be tracked based on ignore rules and file type.
+// It excludes binary files and files matching gitignore patterns.
 func (w *Watcher) shouldTrackFile(path string) bool {
 	if w.shouldIgnore(path, false) {
 		return false

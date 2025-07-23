@@ -1,3 +1,5 @@
+// Package store provides storage implementations for persisting chunks in the
+// Carya version control system, including SQLite and JSON-based storage.
 package store
 
 import (
@@ -7,10 +9,13 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// SQLiteStore provides SQLite-based persistent storage for chunks.
 type SQLiteStore struct {
-	db *sql.DB
+	db *sql.DB // SQLite database connection
 }
 
+// NewSQLiteStore creates a new SQLite store with the specified database file path.
+// It automatically initializes the required tables and indexes.
 func NewSQLiteStore(dataSourceName string) (*SQLiteStore, error) {
 	db, err := sql.Open("sqlite3", dataSourceName)
 	if err != nil {
@@ -25,6 +30,7 @@ func NewSQLiteStore(dataSourceName string) (*SQLiteStore, error) {
 	return store, nil
 }
 
+// initTables creates the chunks table and associated indexes if they don't exist.
 func (s *SQLiteStore) initTables() error {
 	query := `
 		CREATE TABLE IF NOT EXISTS chunks (
@@ -44,6 +50,7 @@ func (s *SQLiteStore) initTables() error {
 	return err
 }
 
+// SaveChunk persists a chunk to the SQLite database, replacing any existing chunk with the same ID.
 func (s *SQLiteStore) SaveChunk(c chunk.Chunk) error {
 	query := `
 		INSERT OR REPLACE INTO chunks (id, file_path, diff, start_time, end_time, hash, manual)
@@ -53,6 +60,7 @@ func (s *SQLiteStore) SaveChunk(c chunk.Chunk) error {
 	return err
 }
 
+// FindChunks retrieves all chunks for a specific file path, ordered by creation time (newest first).
 func (s *SQLiteStore) FindChunks(filePath string) ([]chunk.Chunk, error) {
 	query := `
 		SELECT id, file_path, diff, start_time, end_time, hash, manual
@@ -69,6 +77,7 @@ func (s *SQLiteStore) FindChunks(filePath string) ([]chunk.Chunk, error) {
 	return s.scanChunks(rows)
 }
 
+// GetRecentChunks retrieves the most recently created chunks up to the specified limit.
 func (s *SQLiteStore) GetRecentChunks(limit int) ([]chunk.Chunk, error) {
 	query := `
 		SELECT id, file_path, diff, start_time, end_time, hash, manual
@@ -85,6 +94,7 @@ func (s *SQLiteStore) GetRecentChunks(limit int) ([]chunk.Chunk, error) {
 	return s.scanChunks(rows)
 }
 
+// scanChunks converts SQL rows into a slice of Chunk structs.
 func (s *SQLiteStore) scanChunks(rows *sql.Rows) ([]chunk.Chunk, error) {
 	var chunks []chunk.Chunk
 	for rows.Next() {
@@ -98,15 +108,19 @@ func (s *SQLiteStore) scanChunks(rows *sql.Rows) ([]chunk.Chunk, error) {
 	return chunks, rows.Err()
 }
 
+// Close closes the SQLite database connection.
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
+// JSONStore provides in-memory storage for chunks with JSON persistence capability.
+// Note: This implementation currently doesn't persist to disk.
 type JSONStore struct {
-	filePath string
-	chunks   []chunk.Chunk
+	filePath string        // Path where JSON data would be persisted
+	chunks   []chunk.Chunk // In-memory chunk storage
 }
 
+// NewJSONStore creates a new JSON-based chunk store with the specified file path.
 func NewJSONStore(filePath string) *JSONStore {
 	return &JSONStore{
 		filePath: filePath,
@@ -114,6 +128,8 @@ func NewJSONStore(filePath string) *JSONStore {
 	}
 }
 
+// SaveChunk adds or updates a chunk in the in-memory store.
+// If a chunk with the same ID exists, it will be replaced.
 func (s *JSONStore) SaveChunk(c chunk.Chunk) error {
 	for i, existing := range s.chunks {
 		if existing.ID == c.ID {
@@ -125,6 +141,7 @@ func (s *JSONStore) SaveChunk(c chunk.Chunk) error {
 	return s.persist()
 }
 
+// FindChunks retrieves all chunks for a specific file path from the in-memory store.
 func (s *JSONStore) FindChunks(filePath string) ([]chunk.Chunk, error) {
 	var result []chunk.Chunk
 	for _, c := range s.chunks {
@@ -135,6 +152,7 @@ func (s *JSONStore) FindChunks(filePath string) ([]chunk.Chunk, error) {
 	return result, nil
 }
 
+// GetRecentChunks retrieves the most recently added chunks up to the specified limit.
 func (s *JSONStore) GetRecentChunks(limit int) ([]chunk.Chunk, error) {
 	if limit > len(s.chunks) {
 		limit = len(s.chunks)
@@ -144,6 +162,7 @@ func (s *JSONStore) GetRecentChunks(limit int) ([]chunk.Chunk, error) {
 	return result, nil
 }
 
+// persist would write the chunks to disk as JSON. Currently a no-op.
 func (s *JSONStore) persist() error {
 	return nil
 }
