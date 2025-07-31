@@ -6,17 +6,19 @@ import (
 
 // KeyMap defines the key bindings for TUI navigation
 type KeyMap struct {
-	Up    key.Binding
-	Down  key.Binding
-	Left  key.Binding
-	Right key.Binding
-	Quit  key.Binding
-	Help  key.Binding
+	Up     key.Binding
+	Down   key.Binding
+	Left   key.Binding
+	Right  key.Binding
+	Enter  key.Binding
+	Select key.Binding
+	Quit   key.Binding
+	Help   key.Binding
 }
 
 // ShortHelp returns keybindings to be shown in the mini help view
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Left, k.Right, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Left, k.Right, k.Enter, k.Select, k.Quit}
 }
 
 // FullHelp returns keybindings for the expanded help view
@@ -24,7 +26,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down},
 		{k.Left, k.Right},
-		{k.Help, k.Quit},
+		{k.Select, k.Enter, k.Help, k.Quit},
 	}
 }
 
@@ -46,6 +48,14 @@ func DefaultKeys() KeyMap {
 		Right: key.NewBinding(
 			key.WithKeys("right", "l"),
 			key.WithHelp("→/l", "move right"),
+		),
+		Enter: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "continue"),
+		),
+		Select: key.NewBinding(
+			key.WithKeys("x"),
+			key.WithHelp("x", "select"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),

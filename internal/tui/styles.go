@@ -4,22 +4,27 @@ import "github.com/charmbracelet/lipgloss"
 
 // Color palette
 var (
-	ColorPrimary   = lipgloss.Color("#9CFFB9")
-	ColorSecondary = lipgloss.Color("#888888")
+	ColorTitle     = lipgloss.Color("#9CFFB9")
+	ColorPrimary   = lipgloss.Color("#DDDDDD")
+	ColorSecondary = lipgloss.Color("#A6A6A6")
+	ColorHelp      = lipgloss.Color("#808080")
 )
 
 // Common styles
 var (
 	TitleStyle = lipgloss.NewStyle().
-			Foreground(ColorPrimary).
+			Foreground(ColorTitle).
 			Padding(1, 2).
 			Margin(1, 0)
+
+	TextStyle = lipgloss.NewStyle().
+			Foreground(ColorPrimary)
 
 	HelpStyle = lipgloss.NewStyle().
 			Foreground(ColorSecondary)
 
 	HelpDescStyle = lipgloss.NewStyle().
-			Foreground(ColorSecondary)
+			Foreground(ColorHelp)
 
 	HelpKeyStyle = lipgloss.NewStyle().
 			Foreground(ColorSecondary)

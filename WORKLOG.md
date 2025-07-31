@@ -28,3 +28,8 @@ Defines and handles actions taken after a pull or switching branches -- things s
 
 1. Improve housekeeping engine - presently all configs need to be registered, make it smarter
 2. Make things look nicer. Implement LipGloss, BubbleTea.
+
+
+
+
+# HEY BIG NOTE THINGS ARE VERY BROKEN RN FIX PLSE
