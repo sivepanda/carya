@@ -17,7 +17,7 @@ Configure default commands to run following a pull or checkout -- no more having
 
 
 
-## Components *FOR LATER*
+## Planned Components
 ### Housekeeping (more stuff)
 Will automatically detect your stack and provide you templates of housekeeping commands to run.
 
