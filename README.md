@@ -1,3 +1,6 @@
+## DISCLAIMER: THIS PROJECT IS UNDER DEVELOPMENT AND IS CURRENTLY NOT FUNCTIONAL YET!
+That also means you can easily hit me up if you have ideas and have them be integrated into the core platform. Leave an issue!  :)
+
 # Carya
 Reimagining what's possible with version control software.
 
