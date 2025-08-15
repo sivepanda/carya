@@ -19,7 +19,7 @@ var initCmd = &cobra.Command{
 		// Create initializer
 		// Create and run the TUI model
 		model := tui.NewInitModel()
-		p := tea.NewProgram(model)
+		p := tea.NewProgram(&model)
 		if _, err := p.Run(); err != nil {
 			fmt.Printf("Alas, there's been an error")
 			os.Exit(1)
