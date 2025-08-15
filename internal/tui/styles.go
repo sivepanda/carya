@@ -28,6 +28,13 @@ var (
 
 	HelpKeyStyle = lipgloss.NewStyle().
 			Foreground(ColorSecondary)
+
+	ItemStyle = lipgloss.NewStyle().
+			Foreground(ColorPrimary)
+
+	SelectedItemStyle = lipgloss.NewStyle().
+			Foreground(ColorTitle).
+			Bold(true)
 )
 
 // ASCII art for Carya
