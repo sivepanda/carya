@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	initializer "carya/internal/init"
+
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -72,6 +74,7 @@ func (m *InitModel) Init() tea.Cmd {
 // handleFormSubmission processes the form data and executes the setup
 func (m *InitModel) handleFormSubmission() tea.Cmd {
 	// TODO: Replace this placeholder with actual implementation logic
+	initializer.NewInitializer()
 	return func() tea.Msg {
 		return FormSubmittedMsg{}
 	}
@@ -180,8 +183,8 @@ func (m *InitModel) View() string {
 		content = lipgloss.JoinVertical(lipgloss.Center, title, welcomeText)
 
 	case StateFeatureSelect:
-		title := TitleStyle.Render("Select Carya Features")
-		
+		title := TitleStyle.Render("═══ SELECT FEATURES ═══")
+
 		var options []string
 		for i, feature := range availableFeatures {
 			cursor := " "
@@ -205,12 +208,12 @@ func (m *InitModel) View() string {
 
 		optionsText := strings.Join(options, "\n")
 		instructions := HelpDescStyle.Render("\nUse ↑/↓ to navigate, 'x' to select/deselect, Enter to continue")
-		
+
 		content = lipgloss.JoinVertical(lipgloss.Left, title, optionsText, instructions)
 
 	case StateConfirm:
-		title := TitleStyle.Render("Confirm Selection")
-		
+		title := TitleStyle.Render("═══ CONFIRM SELECTION ═══")
+
 		// Show selected features
 		selected := m.getSelectedFeatures()
 		var summary string
@@ -232,7 +235,7 @@ func (m *InitModel) View() string {
 		// Show confirmation options
 		yesOption := "  Yes, proceed with setup"
 		noOption := "  No, go back to feature selection"
-		
+
 		if m.confirmSelection {
 			yesOption = SelectedItemStyle.Render("> Yes, proceed with setup")
 			noOption = ItemStyle.Render("  No, go back to feature selection")
@@ -243,11 +246,11 @@ func (m *InitModel) View() string {
 
 		confirmText := summary + "Proceed with setup?\n\n" + yesOption + "\n" + noOption
 		instructions := HelpDescStyle.Render("\nUse ↑/↓ to navigate, Enter to confirm")
-		
+
 		content = lipgloss.JoinVertical(lipgloss.Left, title, TextStyle.Render(confirmText), instructions)
 
 	case StateExecute:
-		title := TitleStyle.Render("Processing Your Selection")
+		title := TitleStyle.Render("═══ PROCESSING ═══")
 
 		selected := m.getSelectedFeatures()
 		var summary string
@@ -287,7 +290,7 @@ func (m *InitModel) View() string {
 			}
 		}
 
-		title := TitleStyle.Render("Setup Complete!")
+		title := TitleStyle.Render("═══ SETUP COMPLETE ═══")
 		completionText := TextStyle.Render(summary + "\nPress Enter to exit.")
 		content = lipgloss.JoinVertical(lipgloss.Center, title, completionText)
 	}
