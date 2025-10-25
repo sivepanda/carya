@@ -26,3 +26,7 @@ Utilizes your LSP to give you "windows" into the states of other active users' r
 
 ### Synchronous Development & Environment Sharing
 Creates a shell of a host user's environment and recreates it on the client, while also streaming files between users, enabling a faster, more localized synchronous development pathway.
+
+
+
+lorem ipsum dolor

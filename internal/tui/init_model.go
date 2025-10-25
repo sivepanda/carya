@@ -44,6 +44,7 @@ type InitModel struct {
 	width            int
 	height           int
 	confirmSelection bool
+	err              error
 }
 
 // NewInitModel creates a new init model
@@ -73,20 +74,38 @@ func (m *InitModel) Init() tea.Cmd {
 
 // handleFormSubmission processes the form data and executes the setup
 func (m *InitModel) handleFormSubmission() tea.Cmd {
-	// TODO: Replace this placeholder with actual implementation logic
-	initializer.NewInitializer()
 	return func() tea.Msg {
-		return FormSubmittedMsg{}
+		// Get the selected features from the model
+		selectedFeatures := m.getSelectedFeatures()
+
+		// Create initializer with selected features
+		init, err := initializer.NewInitializer(selectedFeatures)
+		if err != nil {
+			return FormSubmittedMsg{Error: err}
+		}
+
+		// Initialize the repository
+		if err := init.Initialize(); err != nil {
+			return FormSubmittedMsg{Error: err}
+		}
+
+		return FormSubmittedMsg{Error: nil}
 	}
 }
 
 // FormSubmittedMsg indicates that form processing is complete
-type FormSubmittedMsg struct{}
+type FormSubmittedMsg struct {
+	Error error
+}
 
 // Update handles messages and updates the model
 func (m *InitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case FormSubmittedMsg:
+		if msg.Error != nil {
+			// Store error and still go to complete state to show it
+			m.err = msg.Error
+		}
 		m.state = StateComplete
 		return m, nil
 
@@ -274,25 +293,34 @@ func (m *InitModel) View() string {
 		content = lipgloss.JoinVertical(lipgloss.Center, title, executionText, helpText)
 
 	case StateComplete:
-		selected := m.getSelectedFeatures()
-		var summary string
-		if len(selected) == 0 {
-			summary = "No features selected"
+		if m.err != nil {
+			// Show error state
+			title := TitleStyle.Render("═══ SETUP FAILED ═══")
+			errorText := TextStyle.Render(fmt.Sprintf("Error: %v\n\nPress Enter to exit.", m.err))
+			content = lipgloss.JoinVertical(lipgloss.Center, title, errorText)
 		} else {
-			summary = "Selected features:\n"
-			for _, featureKey := range selected {
-				for _, feature := range availableFeatures {
-					if feature.Key == featureKey {
-						summary += fmt.Sprintf("• %s\n", feature.Name)
-						break
+			// Show success state
+			selected := m.getSelectedFeatures()
+			var summary string
+			if len(selected) == 0 {
+				summary = "Basic Carya repository initialized (no features enabled)\n"
+			} else {
+				summary = "Successfully initialized with features:\n\n"
+				for _, featureKey := range selected {
+					for _, feature := range availableFeatures {
+						if feature.Key == featureKey {
+							summary += fmt.Sprintf("✓ %s\n", feature.Name)
+							break
+						}
 					}
 				}
+				summary += "\n"
 			}
-		}
 
-		title := TitleStyle.Render("═══ SETUP COMPLETE ═══")
-		completionText := TextStyle.Render(summary + "\nPress Enter to exit.")
-		content = lipgloss.JoinVertical(lipgloss.Center, title, completionText)
+			title := TitleStyle.Render("═══ SETUP COMPLETE ═══")
+			completionText := TextStyle.Render(summary + "Press Enter to exit.")
+			content = lipgloss.JoinVertical(lipgloss.Center, title, completionText)
+		}
 	}
 
 	// Add help view at the bottom

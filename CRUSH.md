@@ -28,3 +28,7 @@
 - `cmd/`: Application entry points
 - `internal/`: Private application code
 - `.carya/`: Application data directory
+
+
+
+lorem ipsim

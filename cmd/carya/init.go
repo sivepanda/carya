@@ -21,7 +21,7 @@ var initCmd = &cobra.Command{
 		model := tui.NewInitModel()
 		p := tea.NewProgram(&model)
 		if _, err := p.Run(); err != nil {
-			fmt.Printf("Alas, there's been an error")
+			fmt.Fprintf(os.Stderr, "Error running initialization: %v\n", err)
 			os.Exit(1)
 		}
 	},
