@@ -1,9 +1,11 @@
 package init
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"carya/internal/features/engine"
@@ -43,6 +45,56 @@ func (i *Initializer) isFeatureEnabled(featureKey string) bool {
 	return false
 }
 
+// ensureGitignore ensures .carya/ is in .gitignore
+func (i *Initializer) ensureGitignore() error {
+	gitignorePath := ".gitignore"
+	caryaEntry := ".carya/"
+
+	// Check if .gitignore exists
+	content := ""
+	if data, err := os.ReadFile(gitignorePath); err == nil {
+		content = string(data)
+
+		// Check if .carya/ is already in .gitignore
+		scanner := bufio.NewScanner(strings.NewReader(content))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == caryaEntry || line == ".carya" {
+				// Already present
+				return nil
+			}
+		}
+	}
+
+	// Add .carya/ to .gitignore
+	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open .gitignore: %w", err)
+	}
+	defer f.Close()
+
+	// Add newline before entry if file doesn't end with one
+	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+		if _, err := f.WriteString("\n"); err != nil {
+			return fmt.Errorf("failed to write to .gitignore: %w", err)
+		}
+	}
+
+	// Add comment and entry
+	if len(content) == 0 {
+		// New file, add header
+		if _, err := f.WriteString("# Carya directory\n"); err != nil {
+			return fmt.Errorf("failed to write to .gitignore: %w", err)
+		}
+	}
+
+	if _, err := f.WriteString(caryaEntry + "\n"); err != nil {
+		return fmt.Errorf("failed to write to .gitignore: %w", err)
+	}
+
+	return nil
+}
+
 // Initialize sets up the repository and all features
 func (i *Initializer) Initialize() error {
 	fmt.Println("Initializing Carya repository...")
@@ -53,6 +105,14 @@ func (i *Initializer) Initialize() error {
 	}
 
 	fmt.Println("Created .carya directory")
+
+	// Ensure .carya/ is in .gitignore
+	if err := i.ensureGitignore(); err != nil {
+		// Don't fail the init, just warn
+		fmt.Printf("Warning: Could not update .gitignore: %v\n", err)
+	} else {
+		fmt.Println("Added .carya/ to .gitignore")
+	}
 
 	// Initialize features based on user selection
 	if i.isFeatureEnabled("featcom") {

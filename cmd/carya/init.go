@@ -20,9 +20,23 @@ var initCmd = &cobra.Command{
 		// Create and run the TUI model
 		model := tui.NewInitModel()
 		p := tea.NewProgram(&model)
-		if _, err := p.Run(); err != nil {
+		finalModel, err := p.Run()
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error running initialization: %v\n", err)
 			os.Exit(1)
+		}
+
+		// Check if we should launch housekeeping setup
+		if initModel, ok := finalModel.(*tui.InitModel); ok {
+			if initModel.ShouldLaunchHousekeeping() {
+				// Launch housekeeping TUI
+				housekeepingModel := tui.NewHousekeepingModel()
+				p := tea.NewProgram(housekeepingModel)
+				if _, err := p.Run(); err != nil {
+					fmt.Fprintf(os.Stderr, "Error running housekeeping setup: %v\n", err)
+					os.Exit(1)
+				}
+			}
 		}
 	},
 }

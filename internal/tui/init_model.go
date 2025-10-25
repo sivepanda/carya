@@ -35,16 +35,17 @@ var availableFeatures = []Feature{
 
 // InitModel represents the Bubble Tea model for the init command
 type InitModel struct {
-	help             help.Model
-	keys             KeyMap
-	state            int
-	cursor           int
-	selectedFeatures map[string]bool
-	showAll          bool
-	width            int
-	height           int
-	confirmSelection bool
-	err              error
+	help               help.Model
+	keys               KeyMap
+	state              int
+	cursor             int
+	selectedFeatures   map[string]bool
+	showAll            bool
+	width              int
+	height             int
+	confirmSelection   bool
+	err                error
+	launchHousekeeping bool
 }
 
 // NewInitModel creates a new init model
@@ -78,24 +79,45 @@ func (m *InitModel) handleFormSubmission() tea.Cmd {
 		// Get the selected features from the model
 		selectedFeatures := m.getSelectedFeatures()
 
+		// Special case: If ONLY housekeeping is selected, launch the housekeeping TUI
+		if len(selectedFeatures) == 1 && selectedFeatures[0] == "housekeep" {
+			// Create .carya directory first
+			init, err := initializer.NewInitializer([]string{})
+			if err != nil {
+				return FormSubmittedMsg{Error: err, LaunchHousekeeping: false}
+			}
+
+			if err := init.Initialize(); err != nil {
+				return FormSubmittedMsg{Error: err, LaunchHousekeeping: false}
+			}
+
+			return FormSubmittedMsg{Error: nil, LaunchHousekeeping: true}
+		}
+
 		// Create initializer with selected features
 		init, err := initializer.NewInitializer(selectedFeatures)
 		if err != nil {
-			return FormSubmittedMsg{Error: err}
+			return FormSubmittedMsg{Error: err, LaunchHousekeeping: false}
 		}
 
 		// Initialize the repository
 		if err := init.Initialize(); err != nil {
-			return FormSubmittedMsg{Error: err}
+			return FormSubmittedMsg{Error: err, LaunchHousekeeping: false}
 		}
 
-		return FormSubmittedMsg{Error: nil}
+		return FormSubmittedMsg{Error: nil, LaunchHousekeeping: false}
 	}
 }
 
 // FormSubmittedMsg indicates that form processing is complete
 type FormSubmittedMsg struct {
-	Error error
+	Error              error
+	LaunchHousekeeping bool
+}
+
+// ShouldLaunchHousekeeping returns true if the housekeeping TUI should be launched
+func (m *InitModel) ShouldLaunchHousekeeping() bool {
+	return m.launchHousekeeping
 }
 
 // Update handles messages and updates the model
@@ -106,6 +128,7 @@ func (m *InitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Store error and still go to complete state to show it
 			m.err = msg.Error
 		}
+		m.launchHousekeeping = msg.LaunchHousekeeping
 		m.state = StateComplete
 		return m, nil
 
@@ -298,6 +321,11 @@ func (m *InitModel) View() string {
 			title := TitleStyle.Render("═══ SETUP FAILED ═══")
 			errorText := TextStyle.Render(fmt.Sprintf("Error: %v\n\nPress Enter to exit.", m.err))
 			content = lipgloss.JoinVertical(lipgloss.Center, title, errorText)
+		} else if m.launchHousekeeping {
+			// Show housekeeping launch message
+			title := TitleStyle.Render("═══ SETUP COMPLETE ═══")
+			completionText := TextStyle.Render("Basic Carya repository initialized.\n\nLaunching housekeeping setup...\n\nPress Enter to continue.")
+			content = lipgloss.JoinVertical(lipgloss.Center, title, completionText)
 		} else {
 			// Show success state
 			selected := m.getSelectedFeatures()
