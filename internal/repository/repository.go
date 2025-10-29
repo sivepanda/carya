@@ -53,3 +53,13 @@ func (r *Repository) Exists() bool {
 	_, err := os.Stat(r.caryaPath)
 	return !os.IsNotExist(err)
 }
+
+// PIDPath returns the path to the daemon PID file
+func (r *Repository) PIDPath() string {
+	return filepath.Join(r.caryaPath, "carya.pid")
+}
+
+// LogPath returns the path to the daemon log file
+func (r *Repository) LogPath() string {
+	return filepath.Join(r.caryaPath, "carya.log")
+}

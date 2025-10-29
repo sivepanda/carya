@@ -4,6 +4,7 @@ import (
 	"carya/internal/chunk"
 	"carya/internal/store"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -13,25 +14,22 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// DiffViewer states
-const (
-	StateChunkList = iota
-	StateDiffView
-)
-
 // DiffViewerModel represents the Bubble Tea model for viewing diffs
+// Uses a telescope-style split view: list on left, diff on right
 type DiffViewerModel struct {
 	help           help.Model
 	keys           KeyMap
-	state          int
 	chunks         []chunk.Chunk
 	cursor         int
-	viewport       viewport.Model
+	listViewport   viewport.Model
+	diffViewport   viewport.Model
 	store          ChunkStore
 	width          int
 	height         int
 	ready          bool
 	err            error
+	listWidth      int
+	diffWidth      int
 }
 
 // ChunkStore interface for retrieving chunks
@@ -57,7 +55,6 @@ func NewDiffViewerModel(store ChunkStore) (*DiffViewerModel, error) {
 	m := &DiffViewerModel{
 		help:   h,
 		keys:   DefaultKeys(),
-		state:  StateChunkList,
 		chunks: chunks,
 		cursor: 0,
 		store:  store,
@@ -96,63 +93,58 @@ func (m *DiffViewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		if m.state == StateDiffView {
-			headerHeight := 8
-			footerHeight := 4
-			verticalMarginHeight := headerHeight + footerHeight
+		// Split width: 40% for list, 60% for diff
+		m.listWidth = int(float64(msg.Width) * 0.4)
+		m.diffWidth = msg.Width - m.listWidth
 
-			if !m.ready {
-				m.viewport = viewport.New(msg.Width, msg.Height-verticalMarginHeight)
-				m.viewport.YPosition = headerHeight
-				m.ready = true
-			} else {
-				m.viewport.Width = msg.Width
-				m.viewport.Height = msg.Height - verticalMarginHeight
-			}
+		headerHeight := 2
+		footerHeight := 2
+		contentHeight := msg.Height - headerHeight - footerHeight
+
+		if !m.ready {
+			m.listViewport = viewport.New(m.listWidth-2, contentHeight)
+			m.diffViewport = viewport.New(m.diffWidth-2, contentHeight)
+			m.ready = true
+		} else {
+			m.listViewport.Width = m.listWidth - 2
+			m.listViewport.Height = contentHeight
+			m.diffViewport.Width = m.diffWidth - 2
+			m.diffViewport.Height = contentHeight
 		}
+
+		// Update diff content if chunks exist
+		if len(m.chunks) > 0 && m.cursor < len(m.chunks) {
+			m.updateDiffContent()
+		}
+
 		return m, nil
 
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, m.keys.Quit):
-			if m.state == StateDiffView {
-				// Go back to chunk list
-				m.state = StateChunkList
-				m.ready = false
-				return m, nil
-			}
 			return m, tea.Quit
 
 		case key.Matches(msg, m.keys.Up):
-			if m.state == StateChunkList && m.cursor > 0 {
+			if m.cursor > 0 {
 				m.cursor--
+				m.updateDiffContent()
 			}
 
 		case key.Matches(msg, m.keys.Down):
-			if m.state == StateChunkList && m.cursor < len(m.chunks)-1 {
+			if m.cursor < len(m.chunks)-1 {
 				m.cursor++
+				m.updateDiffContent()
 			}
 
-		case key.Matches(msg, m.keys.Enter):
-			if m.state == StateChunkList && len(m.chunks) > 0 {
-				m.state = StateDiffView
-				m.ready = false
-				return m, nil
-			} else if m.state == StateDiffView {
-				m.state = StateChunkList
-				m.ready = false
-				return m, nil
-			}
+		// Allow scrolling the diff with Ctrl+d and Ctrl+u
+		case msg.String() == "ctrl+d":
+			m.diffViewport.ViewDown()
+		case msg.String() == "ctrl+u":
+			m.diffViewport.ViewUp()
 		}
 	}
 
-	// Update viewport if in diff view
-	if m.state == StateDiffView && m.ready {
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
-	}
-
-	return m, nil
+	return m, cmd
 }
 
 // View renders the model
@@ -163,48 +155,54 @@ func (m *DiffViewerModel) View() string {
 		return lipgloss.JoinVertical(lipgloss.Center, title, errorText)
 	}
 
-	switch m.state {
-	case StateChunkList:
-		return m.renderChunkList()
-	case StateDiffView:
-		return m.renderDiffView()
-	default:
-		return ""
+	if !m.ready {
+		return "Loading..."
 	}
+
+	return m.renderSplitView()
 }
 
-// renderChunkList renders the list of chunks
-func (m *DiffViewerModel) renderChunkList() string {
-	title := TitleStyle.Render("═══ CHUNK HISTORY ═══")
-
+// renderSplitView renders the telescope-style split view
+func (m *DiffViewerModel) renderSplitView() string {
 	if len(m.chunks) == 0 {
-		emptyText := TextStyle.Render("No chunks found. Start making changes to see them here!")
-		instructions := HelpDescStyle.Render("\nPress 'q' to quit")
-		return lipgloss.JoinVertical(lipgloss.Left, title, emptyText, instructions)
+		emptyMsg := TextStyle.Render("No chunks found. Start making changes to see them here!\n\nPress 'q' to quit")
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, emptyMsg)
 	}
+
+	// Render both panels
+	listPanel := m.renderChunkListPanel()
+	diffPanel := m.renderDiffPanel()
+
+	// Join horizontally
+	content := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, diffPanel)
+
+	// Add footer
+	footer := HelpDescStyle.Render(fmt.Sprintf("↑/↓: navigate | Ctrl+d/u: scroll diff | q: quit | %d/%d", m.cursor+1, len(m.chunks)))
+
+	return lipgloss.JoinVertical(lipgloss.Left, content, footer)
+}
+
+// renderChunkListPanel renders the left panel with chunk list
+func (m *DiffViewerModel) renderChunkListPanel() string {
+	title := TitleStyle.Render("CHUNKS")
 
 	var items []string
 	for i, c := range m.chunks {
-		cursor := "  "
+		cursor := " "
 		if m.cursor == i {
-			cursor = "> "
+			cursor = "›"
 		}
 
-		// Format the chunk info
-		timeRange := fmt.Sprintf("%s → %s",
-			c.StartTime.Format("15:04:05"),
-			c.EndTime.Format("15:04:05"))
-
-		manualTag := ""
-		if c.Manual {
-			manualTag = " [manual]"
+		// Format filename
+		filename := filepath.Base(c.FilePath)
+		if len(filename) > 30 {
+			filename = filename[:27] + "..."
 		}
 
-		line := fmt.Sprintf("%s%s  %s%s",
-			cursor,
-			c.FilePath,
-			timeRange,
-			manualTag)
+		// Format time
+		timeStr := c.StartTime.Format("15:04:05")
+
+		line := fmt.Sprintf("%s %s %s", cursor, filename, timeStr)
 
 		if m.cursor == i {
 			line = SelectedItemStyle.Render(line)
@@ -214,66 +212,59 @@ func (m *DiffViewerModel) renderChunkList() string {
 		items = append(items, line)
 	}
 
-	// Limit visible items to fit screen
-	visibleItems := items
-	if len(items) > 15 {
-		start := m.cursor - 7
-		end := m.cursor + 8
-		if start < 0 {
-			start = 0
-			end = 15
-		} else if end > len(items) {
-			end = len(items)
-			start = end - 15
-		}
-		visibleItems = items[start:end]
+	m.listViewport.SetContent(strings.Join(items, "\n"))
+
+	// Ensure selected item is visible
+	if m.cursor < m.listViewport.YOffset {
+		m.listViewport.YOffset = m.cursor
+	} else if m.cursor >= m.listViewport.YOffset+m.listViewport.Height {
+		m.listViewport.YOffset = m.cursor - m.listViewport.Height + 1
 	}
 
-	itemsText := strings.Join(visibleItems, "\n")
-	instructions := HelpDescStyle.Render(fmt.Sprintf(
-		"\nShowing %d chunks | ↑/↓ to navigate, Enter to view, 'q' to quit",
-		len(m.chunks)))
+	listStyle := lipgloss.NewStyle().
+		Width(m.listWidth).
+		Height(m.height).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(ColorSecondary)
 
-	return lipgloss.JoinVertical(lipgloss.Left, title, itemsText, instructions)
+	return listStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, m.listViewport.View()))
 }
 
-// renderDiffView renders the detailed diff view
-func (m *DiffViewerModel) renderDiffView() string {
+// renderDiffPanel renders the right panel with diff content
+func (m *DiffViewerModel) renderDiffPanel() string {
 	if m.cursor >= len(m.chunks) {
-		return "Invalid chunk selection"
+		return ""
 	}
 
 	c := m.chunks[m.cursor]
 
-	// Create header
-	title := TitleStyle.Render("═══ CHUNK DETAILS ═══")
-
-	headerStyle := lipgloss.NewStyle().
+	// Create header with chunk info
+	header := lipgloss.NewStyle().
 		Foreground(ColorSecondary).
-		Padding(0, 2)
+		Render(fmt.Sprintf("File: %s | Time: %s → %s",
+			c.FilePath,
+			c.StartTime.Format("15:04:05"),
+			c.EndTime.Format("15:04:05")))
 
-	header := headerStyle.Render(fmt.Sprintf(
-		"File: %s\nTime: %s → %s\nID: %s\nHash: %s\nManual: %v",
-		c.FilePath,
-		c.StartTime.Format("2006-01-02 15:04:05"),
-		c.EndTime.Format("2006-01-02 15:04:05"),
-		c.ID,
-		c.Hash,
-		c.Manual,
-	))
+	diffStyle := lipgloss.NewStyle().
+		Width(m.diffWidth).
+		Height(m.height).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(ColorSecondary)
 
-	// Format diff with syntax highlighting
-	diffContent := m.formatDiff(c.Diff)
+	return diffStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, m.diffViewport.View()))
+}
 
-	if !m.ready {
-		return lipgloss.JoinVertical(lipgloss.Left, title, header, diffContent)
+// updateDiffContent updates the diff viewport with the current chunk's diff
+func (m *DiffViewerModel) updateDiffContent() {
+	if m.cursor >= len(m.chunks) || !m.ready {
+		return
 	}
 
-	m.viewport.SetContent(diffContent)
-
-	instructions := HelpDescStyle.Render("\n↑/↓ to scroll, Enter/q to go back")
-
-	return lipgloss.JoinVertical(lipgloss.Left, title, header, m.viewport.View(), instructions)
+	c := m.chunks[m.cursor]
+	diffContent := m.formatDiff(c.Diff)
+	m.diffViewport.SetContent(diffContent)
+	m.diffViewport.GotoTop()
 }
 
 // formatDiff applies syntax highlighting to diff content

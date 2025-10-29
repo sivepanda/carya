@@ -190,9 +190,20 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 }
 
 // shouldTrackFile determines if a file should be tracked based on ignore rules and file type.
-// It excludes binary files and files matching gitignore patterns.
+// It excludes binary files, temporary files, and files matching gitignore patterns.
 func (w *Watcher) shouldTrackFile(path string) bool {
 	if w.shouldIgnore(path, false) {
+		return false
+	}
+
+	basename := filepath.Base(path)
+
+	// Skip temporary files created by editors
+	if strings.Contains(basename, ".tmp") ||
+		strings.HasSuffix(basename, "~") ||
+		strings.HasSuffix(basename, ".swp") ||
+		strings.HasSuffix(basename, ".swo") ||
+		strings.HasPrefix(basename, ".#") {
 		return false
 	}
 

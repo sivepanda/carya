@@ -120,6 +120,11 @@ func (m *InitModel) ShouldLaunchHousekeeping() bool {
 	return m.launchHousekeeping
 }
 
+// IsFeatureEnabled returns true if a feature is enabled
+func (m *InitModel) IsFeatureEnabled(featureKey string) bool {
+	return m.selectedFeatures[featureKey]
+}
+
 // Update handles messages and updates the model
 func (m *InitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {

@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+//lorme upsum dolor
+
 // ChunkStore defines the interface for persisting and retrieving chunks.
 type ChunkStore interface {
 	// SaveChunk persists a chunk to the store.
@@ -119,4 +121,37 @@ func (m *Manager) flushStaleChunks() {
 	if m.emitter != nil {
 		m.emitter.EmitChunkFlushed(chunks)
 	}
+}
+
+// FlushAll immediately flushes all active chunks to storage.
+func (m *Manager) FlushAll() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if strategy supports FlushAll
+	type flushAller interface {
+		FlushAll() []Chunk
+	}
+
+	fa, ok := m.strategy.(flushAller)
+	if !ok {
+		return nil
+	}
+
+	chunks := fa.FlushAll()
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	for _, chunk := range chunks {
+		if err := m.store.SaveChunk(chunk); err != nil {
+			return err
+		}
+	}
+
+	if m.emitter != nil {
+		m.emitter.EmitChunkFlushed(chunks)
+	}
+
+	return nil
 }

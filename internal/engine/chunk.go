@@ -73,3 +73,8 @@ func (e *Engine) OnFileChange(path string, contents []byte) {
 func (e *Engine) ForceFlush(filePath string) error {
 	return e.chunkManager.ForceFlush(filePath)
 }
+
+// FlushAll immediately flushes all active chunks to storage.
+func (e *Engine) FlushAll() error {
+	return e.chunkManager.FlushAll()
+}

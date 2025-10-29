@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"carya/internal/daemon"
+	"carya/internal/repository"
 	"carya/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,7 +18,6 @@ var initCmd = &cobra.Command{
 	Short: "initialize a new Carya repository.",
 	Long:  `initialize a new Carya repository in the current directory and starts watching for file changes.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// Create initializer
 		// Create and run the TUI model
 		model := tui.NewInitModel()
 		p := tea.NewProgram(&model)
@@ -26,7 +27,7 @@ var initCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Check if we should launch housekeeping setup
+		// Check if we should launch housekeeping setup or start daemon
 		if initModel, ok := finalModel.(*tui.InitModel); ok {
 			if initModel.ShouldLaunchHousekeeping() {
 				// Launch housekeeping TUI
@@ -35,6 +36,29 @@ var initCmd = &cobra.Command{
 				if _, err := p.Run(); err != nil {
 					fmt.Fprintf(os.Stderr, "Error running housekeeping setup: %v\n", err)
 					os.Exit(1)
+				}
+			}
+
+			// Start the daemon if featcom is enabled
+			if initModel.IsFeatureEnabled("featcom") {
+				fmt.Println("\nStarting Carya daemon...")
+
+				repo, err := repository.New()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: Failed to initialize repository: %v\n", err)
+					fmt.Fprintf(os.Stderr, "You can manually start it later with 'carya start'\n")
+				} else {
+					d := daemon.New(repo.PIDPath(), repo.LogPath())
+
+					if d.IsRunning() {
+						fmt.Println("Carya daemon is already running")
+					} else if err := d.Start([]string{"daemon"}); err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: Failed to start daemon: %v\n", err)
+						fmt.Fprintf(os.Stderr, "You can manually start it later with 'carya start'\n")
+					} else {
+						fmt.Println("✓ Carya daemon started")
+						fmt.Printf("  Log file: %s\n", d.GetLogPath())
+					}
 				}
 			}
 		}
