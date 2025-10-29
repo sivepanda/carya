@@ -150,13 +150,24 @@ func (m *DiffViewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View renders the model
 func (m *DiffViewerModel) View() string {
 	if m.err != nil {
-		title := TitleStyle.Render("═══ ERROR ═══")
-		errorText := TextStyle.Render(fmt.Sprintf("Error: %v\n\nPress 'q' to quit.", m.err))
-		return lipgloss.JoinVertical(lipgloss.Center, title, errorText)
+		title := ErrorStyle.Render("✗ ERROR")
+		errorMsg := ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
+
+		errorBox := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorError).
+			Padding(1, 2).
+			Width(60).
+			Render(errorMsg)
+
+		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("q quit")
+		return lipgloss.JoinVertical(lipgloss.Center, title, "", errorBox, instructions)
 	}
 
 	if !m.ready {
-		return "Loading..."
+		spinner := SubtleTextStyle.Render("◐")
+		loadingText := TextStyle.Render("  Loading...")
+		return lipgloss.JoinVertical(lipgloss.Center, spinner+" "+loadingText)
 	}
 
 	return m.renderSplitView()
@@ -165,8 +176,18 @@ func (m *DiffViewerModel) View() string {
 // renderSplitView renders the telescope-style split view
 func (m *DiffViewerModel) renderSplitView() string {
 	if len(m.chunks) == 0 {
-		emptyMsg := TextStyle.Render("No chunks found. Start making changes to see them here!\n\nPress 'q' to quit")
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, emptyMsg)
+		title := TitleStyle.Render("📋 CHUNK VIEWER")
+		emptyMsg := SubtleTextStyle.Render("No chunks found")
+		helpMsg := TextStyle.Render("Start making changes to see them here!")
+
+		emptyBox := DimBoxStyle.Width(50).Align(lipgloss.Center).Render(
+			lipgloss.JoinVertical(lipgloss.Center, emptyMsg, "", helpMsg),
+		)
+
+		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("q quit")
+
+		content := lipgloss.JoinVertical(lipgloss.Center, title, "", emptyBox, instructions)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 	}
 
 	// Render both panels
@@ -176,33 +197,40 @@ func (m *DiffViewerModel) renderSplitView() string {
 	// Join horizontally
 	content := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, diffPanel)
 
-	// Add footer
-	footer := HelpDescStyle.Render(fmt.Sprintf("↑/↓: navigate | Ctrl+d/u: scroll diff | q: quit | %d/%d", m.cursor+1, len(m.chunks)))
+	// Add footer with better formatting
+	navHelp := HelpKeyStyle.Render("↑/↓") + HelpDescStyle.Render(" navigate")
+	scrollHelp := HelpKeyStyle.Render("ctrl+d/u") + HelpDescStyle.Render(" scroll")
+	quitHelp := HelpKeyStyle.Render("q") + HelpDescStyle.Render(" quit")
+	counter := SubtleTextStyle.Render(fmt.Sprintf("%d/%d", m.cursor+1, len(m.chunks)))
+
+	footer := lipgloss.NewStyle().
+		Padding(0, 1).
+		Render(navHelp + " • " + scrollHelp + " • " + quitHelp + " • " + counter)
 
 	return lipgloss.JoinVertical(lipgloss.Left, content, footer)
 }
 
 // renderChunkListPanel renders the left panel with chunk list
 func (m *DiffViewerModel) renderChunkListPanel() string {
-	title := TitleStyle.Render("CHUNKS")
+	title := HeaderStyle.Padding(1, 2).Render("📋 CHUNKS")
 
 	var items []string
 	for i, c := range m.chunks {
-		cursor := " "
+		cursor := "  "
 		if m.cursor == i {
-			cursor = "›"
+			cursor = "❯ "
 		}
 
 		// Format filename
 		filename := filepath.Base(c.FilePath)
-		if len(filename) > 30 {
-			filename = filename[:27] + "..."
+		if len(filename) > 25 {
+			filename = filename[:22] + "..."
 		}
 
 		// Format time
-		timeStr := c.StartTime.Format("15:04:05")
+		timeStr := SubtleTextStyle.Render(c.StartTime.Format("15:04"))
 
-		line := fmt.Sprintf("%s %s %s", cursor, filename, timeStr)
+		line := cursor + filename + " " + timeStr
 
 		if m.cursor == i {
 			line = SelectedItemStyle.Render(line)
@@ -225,7 +253,8 @@ func (m *DiffViewerModel) renderChunkListPanel() string {
 		Width(m.listWidth).
 		Height(m.height).
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(ColorSecondary)
+		BorderForeground(ColorBorder).
+		Padding(0, 1)
 
 	return listStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, m.listViewport.View()))
 }
@@ -239,18 +268,23 @@ func (m *DiffViewerModel) renderDiffPanel() string {
 	c := m.chunks[m.cursor]
 
 	// Create header with chunk info
+	fileLabel := SubtleTextStyle.Render("File:")
+	filePath := TextStyle.Bold(true).Render(c.FilePath)
+	timeLabel := SubtleTextStyle.Render("Time:")
+	timeRange := TextStyle.Render(fmt.Sprintf("%s → %s",
+		c.StartTime.Format("15:04:05"),
+		c.EndTime.Format("15:04:05")))
+
 	header := lipgloss.NewStyle().
-		Foreground(ColorSecondary).
-		Render(fmt.Sprintf("File: %s | Time: %s → %s",
-			c.FilePath,
-			c.StartTime.Format("15:04:05"),
-			c.EndTime.Format("15:04:05")))
+		Padding(1, 2).
+		Render(fileLabel + " " + filePath + "  " + timeLabel + " " + timeRange)
 
 	diffStyle := lipgloss.NewStyle().
 		Width(m.diffWidth).
 		Height(m.height).
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(ColorSecondary)
+		BorderStyle(lipgloss.ThickBorder()).
+		BorderForeground(ColorTitle).
+		Padding(0, 1)
 
 	return diffStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, m.diffViewport.View()))
 }
@@ -272,22 +306,26 @@ func (m *DiffViewerModel) formatDiff(diff string) string {
 	lines := strings.Split(diff, "\n")
 	var formatted []string
 
-	// Style definitions for diff lines
-	addedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00"))
-	removedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
-	contextStyle := lipgloss.NewStyle().Foreground(ColorSecondary)
-	headerStyle := lipgloss.NewStyle().Foreground(ColorTitle).Bold(true)
+	// Style definitions for diff lines - using our new color palette
+	addedStyle := lipgloss.NewStyle().Foreground(ColorSuccess).Bold(false)
+	removedStyle := lipgloss.NewStyle().Foreground(ColorError).Bold(false)
+	contextStyle := lipgloss.NewStyle().Foreground(ColorTertiary)
+	headerStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+	rangeStyle := lipgloss.NewStyle().Foreground(ColorWarning).Bold(true)
 
 	for _, line := range lines {
 		switch {
+		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+			// File headers in diff
+			formatted = append(formatted, headerStyle.Render(line))
 		case strings.HasPrefix(line, "+"):
 			formatted = append(formatted, addedStyle.Render(line))
 		case strings.HasPrefix(line, "-"):
 			formatted = append(formatted, removedStyle.Render(line))
 		case strings.HasPrefix(line, "@@"):
-			formatted = append(formatted, headerStyle.Render(line))
+			formatted = append(formatted, rangeStyle.Render(line))
 		case strings.HasPrefix(line, "diff --git") || strings.HasPrefix(line, "index"):
-			formatted = append(formatted, headerStyle.Render(line))
+			formatted = append(formatted, SubtleTextStyle.Render(line))
 		case strings.HasPrefix(line, "File:") || strings.HasPrefix(line, "Time:") || strings.HasPrefix(line, "Hash:"):
 			formatted = append(formatted, contextStyle.Render(line))
 		default:

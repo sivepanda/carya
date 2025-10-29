@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	initializer "carya/internal/init"
 
@@ -225,134 +224,196 @@ func (m *InitModel) View() string {
 
 	switch m.state {
 	case StateWelcome:
-		title := TitleStyle.Render(CaryaASCII)
-		welcomeText := TextStyle.Render("Hit 'Enter' to begin the setup process!")
-		content = lipgloss.JoinVertical(lipgloss.Center, title, welcomeText)
+		asciiStyle := lipgloss.NewStyle().
+			Foreground(ColorTitle).
+			Bold(true)
+		title := asciiStyle.Render(CaryaASCII)
+
+		welcomeBox := BoxStyle.
+			Width(60).
+			Align(lipgloss.Center).
+			Render(HeaderStyle.Render("Hit 'Enter' to begin the setup process!"))
+
+		content = lipgloss.JoinVertical(lipgloss.Center, title, "", welcomeBox)
 
 	case StateFeatureSelect:
-		title := TitleStyle.Render("═══ SELECT FEATURES ═══")
+		title := TitleStyle.Render("⚙ SELECT FEATURES")
 
 		var options []string
 		for i, feature := range availableFeatures {
-			cursor := " "
+			cursor := "  "
 			if m.cursor == i {
-				cursor = ">"
+				cursor = "❯ "
 			}
 
-			checked := " "
+			checkbox := "☐"
 			if m.selectedFeatures[feature.Key] {
-				checked = "✓"
+				checkbox = "☑"
 			}
 
-			line := fmt.Sprintf("%s [%s] %s", cursor, checked, feature.Name)
+			line := cursor + checkbox + " " + feature.Name
+			desc := "    " + feature.Description
+
 			if m.cursor == i {
 				line = SelectedItemStyle.Render(line)
+				desc = SubtleTextStyle.Render(desc)
 			} else {
 				line = ItemStyle.Render(line)
+				desc = HelpDescStyle.Render(desc)
 			}
+
 			options = append(options, line)
+			options = append(options, desc)
+			if i < len(availableFeatures)-1 {
+				options = append(options, "")
+			}
 		}
 
-		optionsText := strings.Join(options, "\n")
-		instructions := HelpDescStyle.Render("\nUse ↑/↓ to navigate, 'x' to select/deselect, Enter to continue")
+		featuresBox := ActiveBoxStyle.Width(70).Render(
+			lipgloss.JoinVertical(lipgloss.Left, options...),
+		)
 
-		content = lipgloss.JoinVertical(lipgloss.Left, title, optionsText, instructions)
+		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
+
+		content = lipgloss.JoinVertical(lipgloss.Left, title, "", featuresBox, instructions)
 
 	case StateConfirm:
-		title := TitleStyle.Render("═══ CONFIRM SELECTION ═══")
+		title := TitleStyle.Render("✓ CONFIRM SELECTION")
 
 		// Show selected features
 		selected := m.getSelectedFeatures()
-		var summary string
+		var summaryContent []string
 		if len(selected) == 0 {
-			summary = "You haven't selected any features.\nBasic Carya configuration will be initialized.\n"
+			summaryContent = append(summaryContent, SubtleTextStyle.Render("No features selected"))
+			summaryContent = append(summaryContent, TextStyle.Render("Basic Carya configuration will be initialized"))
 		} else {
-			summary = "You selected the following features:\n\n"
 			for _, featureKey := range selected {
 				for _, feature := range availableFeatures {
 					if feature.Key == featureKey {
-						summary += fmt.Sprintf("• %s\n", feature.Name)
+						summaryContent = append(summaryContent, SubtleTextStyle.Render("  ●")+" "+TextStyle.Render(feature.Name))
 						break
 					}
 				}
 			}
-			summary += "\n"
 		}
 
+		summaryBox := DimBoxStyle.Width(60).Render(
+			lipgloss.JoinVertical(lipgloss.Left, summaryContent...),
+		)
+
 		// Show confirmation options
+		questionHeader := HeaderStyle.Margin(2, 0, 1, 0).Render("Proceed with setup?")
+
 		yesOption := "  Yes, proceed with setup"
 		noOption := "  No, go back to feature selection"
 
 		if m.confirmSelection {
-			yesOption = SelectedItemStyle.Render("> Yes, proceed with setup")
+			yesOption = SelectedItemStyle.Render("❯ Yes, proceed with setup")
 			noOption = ItemStyle.Render("  No, go back to feature selection")
 		} else {
 			yesOption = ItemStyle.Render("  Yes, proceed with setup")
-			noOption = SelectedItemStyle.Render("> No, go back to feature selection")
+			noOption = SelectedItemStyle.Render("❯ No, go back to feature selection")
 		}
 
-		confirmText := summary + "Proceed with setup?\n\n" + yesOption + "\n" + noOption
-		instructions := HelpDescStyle.Render("\nUse ↑/↓ to navigate, Enter to confirm")
+		choicesBox := BoxStyle.Width(60).Render(
+			lipgloss.JoinVertical(lipgloss.Left, yesOption, noOption),
+		)
 
-		content = lipgloss.JoinVertical(lipgloss.Left, title, TextStyle.Render(confirmText), instructions)
+		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("↑/↓ navigate • enter confirm")
+
+		content = lipgloss.JoinVertical(lipgloss.Left, title, "", summaryBox, questionHeader, choicesBox, instructions)
 
 	case StateExecute:
-		title := TitleStyle.Render("═══ PROCESSING ═══")
+		title := TitleStyle.Render("⚙ PROCESSING")
 
 		selected := m.getSelectedFeatures()
-		var summary string
+		var summaryLines []string
+
+		spinner := SubtleTextStyle.Render("◐")
+
 		if len(selected) == 0 {
-			summary = "You didn't select any features.\nInitializing basic Carya configuration..."
+			summaryLines = append(summaryLines, spinner+" "+TextStyle.Render("Initializing basic Carya configuration..."))
 		} else {
-			summary = "You selected the following features:\n\n"
 			for _, featureKey := range selected {
 				for _, feature := range availableFeatures {
 					if feature.Key == featureKey {
-						summary += fmt.Sprintf("✓ %s\n", feature.Name)
+						summaryLines = append(summaryLines, SuccessStyle.Render("✓")+" "+TextStyle.Render(feature.Name))
 						break
 					}
 				}
 			}
-			summary += "\nSetting up your repository..."
+			summaryLines = append(summaryLines, "")
+			summaryLines = append(summaryLines, spinner+" "+TextStyle.Render("Setting up your repository..."))
 		}
 
-		executionText := TextStyle.Render(summary)
-		helpText := HelpDescStyle.Render("\nPress Enter to complete setup")
-		content = lipgloss.JoinVertical(lipgloss.Center, title, executionText, helpText)
+		processingBox := BoxStyle.Width(60).Render(
+			lipgloss.JoinVertical(lipgloss.Left, summaryLines...),
+		)
+
+		content = lipgloss.JoinVertical(lipgloss.Left, title, "", processingBox)
 
 	case StateComplete:
 		if m.err != nil {
 			// Show error state
-			title := TitleStyle.Render("═══ SETUP FAILED ═══")
-			errorText := TextStyle.Render(fmt.Sprintf("Error: %v\n\nPress Enter to exit.", m.err))
-			content = lipgloss.JoinVertical(lipgloss.Center, title, errorText)
+			title := ErrorStyle.Render("✗ SETUP FAILED")
+			errorMsg := ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
+
+			errorBox := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorError).
+				Padding(1, 2).
+				Width(60).
+				Render(errorMsg)
+
+			instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("enter exit")
+			content = lipgloss.JoinVertical(lipgloss.Left, title, "", errorBox, instructions)
 		} else if m.launchHousekeeping {
 			// Show housekeeping launch message
-			title := TitleStyle.Render("═══ SETUP COMPLETE ═══")
-			completionText := TextStyle.Render("Basic Carya repository initialized.\n\nLaunching housekeeping setup...\n\nPress Enter to continue.")
-			content = lipgloss.JoinVertical(lipgloss.Center, title, completionText)
+			title := SuccessStyle.Render("✓ SETUP COMPLETE")
+
+			var msgLines []string
+			msgLines = append(msgLines, TextStyle.Render("Basic Carya repository initialized"))
+			msgLines = append(msgLines, "")
+			msgLines = append(msgLines, HeaderStyle.Render("→ Launching housekeeping setup..."))
+
+			launchBox := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorSuccess).
+				Padding(1, 2).
+				Width(60).
+				Render(lipgloss.JoinVertical(lipgloss.Left, msgLines...))
+
+			instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("enter continue")
+			content = lipgloss.JoinVertical(lipgloss.Left, title, "", launchBox, instructions)
 		} else {
 			// Show success state
+			title := SuccessStyle.Render("✓ SETUP COMPLETE")
+
 			selected := m.getSelectedFeatures()
-			var summary string
+			var summaryLines []string
 			if len(selected) == 0 {
-				summary = "Basic Carya repository initialized (no features enabled)\n"
+				summaryLines = append(summaryLines, TextStyle.Render("Basic Carya repository initialized"))
+				summaryLines = append(summaryLines, SubtleTextStyle.Render("(no features enabled)"))
 			} else {
-				summary = "Successfully initialized with features:\n\n"
 				for _, featureKey := range selected {
 					for _, feature := range availableFeatures {
 						if feature.Key == featureKey {
-							summary += fmt.Sprintf("✓ %s\n", feature.Name)
+							summaryLines = append(summaryLines, SuccessStyle.Render("✓")+" "+TextStyle.Render(feature.Name))
 							break
 						}
 					}
 				}
-				summary += "\n"
 			}
 
-			title := TitleStyle.Render("═══ SETUP COMPLETE ═══")
-			completionText := TextStyle.Render(summary + "Press Enter to exit.")
-			content = lipgloss.JoinVertical(lipgloss.Center, title, completionText)
+			successBox := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorSuccess).
+				Padding(1, 2).
+				Width(60).
+				Render(lipgloss.JoinVertical(lipgloss.Left, summaryLines...))
+
+			instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("enter exit")
+			content = lipgloss.JoinVertical(lipgloss.Left, title, "", successBox, instructions)
 		}
 	}
 

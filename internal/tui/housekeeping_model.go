@@ -358,31 +358,43 @@ func (m HousekeepingModel) View() string {
 
 	switch m.state {
 	case HKStateDetecting:
-		title := TitleStyle.Render("═══ HOUSEKEEPING SETUP ═══")
-		detectingText := TextStyle.Render("Detecting package managers and build systems...")
-		content = lipgloss.JoinVertical(lipgloss.Left, title, detectingText)
+		title := TitleStyle.Render("⚙ HOUSEKEEPING SETUP")
+
+		spinner := SubtleTextStyle.Render("◐")
+		detectingText := TextStyle.Render("  Detecting package managers and build systems...")
+
+		box := BoxStyle.Width(60).Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				spinner+" "+detectingText,
+			),
+		)
+
+		content = lipgloss.JoinVertical(lipgloss.Left, title, "", box)
 
 	case HKStateCategorySelect:
-		title := TitleStyle.Render("═══ DETECTED PACKAGES ═══")
+		title := TitleStyle.Render("✓ DETECTED PACKAGES")
 
-		// Show detected packages
+		// Show detected packages in a box
 		var detectedList []string
 		for _, pkg := range m.detected {
-			detectedList = append(detectedList, fmt.Sprintf("  • %s", pkg.Type.Description))
+			detectedList = append(detectedList, SubtleTextStyle.Render("  ●")+" "+TextStyle.Render(pkg.Type.Description))
 		}
-		detectedText := TextStyle.Render(strings.Join(detectedList, "\n"))
+
+		packagesBox := DimBoxStyle.Width(60).Render(
+			lipgloss.JoinVertical(lipgloss.Left, detectedList...),
+		)
 
 		// Show category selection
-		categoryTitle := TextStyle.Render("\nSelect category for housekeeping commands:\n")
+		categoryTitle := HeaderStyle.Margin(2, 0, 1, 0).Render("Select category:")
 
 		var options []string
 		for i, category := range m.categoryOptions {
-			cursor := " "
+			cursor := "  "
 			if m.categoryCursor == i {
-				cursor = ">"
+				cursor = "❯ "
 			}
 
-			line := fmt.Sprintf("%s %s", cursor, category)
+			line := cursor + category
 			if m.categoryCursor == i {
 				line = SelectedItemStyle.Render(line)
 			} else {
@@ -391,32 +403,35 @@ func (m HousekeepingModel) View() string {
 			options = append(options, line)
 		}
 
-		optionsText := strings.Join(options, "\n")
-		instructions := HelpDescStyle.Render("\nUse ↑/↓ to navigate, Enter to select")
+		optionsBox := BoxStyle.Width(60).Render(
+			lipgloss.JoinVertical(lipgloss.Left, options...),
+		)
 
-		content = lipgloss.JoinVertical(lipgloss.Left, title, detectedText, categoryTitle, optionsText, instructions)
+		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("↑/↓ navigate • enter select")
+
+		content = lipgloss.JoinVertical(lipgloss.Left, title, "", packagesBox, categoryTitle, optionsBox, instructions)
 
 	case HKStateCommandSelect:
-		title := TitleStyle.Render(fmt.Sprintf("═══ SUGGESTED %s COMMANDS ═══", strings.ToUpper(m.selectedCategory)))
+		title := TitleStyle.Render(fmt.Sprintf("⚡ %s COMMANDS", strings.ToUpper(m.selectedCategory)))
 
 		var options []string
 		for i, item := range m.suggestions {
-			cursor := " "
+			cursor := "  "
 			if m.cursor == i {
-				cursor = ">"
+				cursor = "❯ "
 			}
 
-			checked := " "
+			checkbox := "☐"
 			if item.Selected {
-				checked = "✓"
+				checkbox = "☑"
 			}
 
-			line := fmt.Sprintf("%s [%s] %s", cursor, checked, item.Command.Description)
-			cmdLine := fmt.Sprintf("       %s", item.Command.Command)
+			line := cursor + checkbox + " " + item.Command.Description
+			cmdLine := "    " + item.Command.Command
 
 			if m.cursor == i {
 				line = SelectedItemStyle.Render(line)
-				cmdLine = HelpDescStyle.Render(cmdLine)
+				cmdLine = SubtleTextStyle.Render(cmdLine)
 			} else {
 				line = ItemStyle.Render(line)
 				cmdLine = HelpDescStyle.Render(cmdLine)
@@ -424,15 +439,21 @@ func (m HousekeepingModel) View() string {
 
 			options = append(options, line)
 			options = append(options, cmdLine)
+			if i < len(m.suggestions)-1 {
+				options = append(options, "")
+			}
 		}
 
-		optionsText := strings.Join(options, "\n")
-		instructions := HelpDescStyle.Render("\nUse ↑/↓ to navigate, 'x' to toggle selection, Enter to continue")
+		commandsBox := ActiveBoxStyle.Width(70).Render(
+			lipgloss.JoinVertical(lipgloss.Left, options...),
+		)
 
-		content = lipgloss.JoinVertical(lipgloss.Left, title, optionsText, instructions)
+		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
+
+		content = lipgloss.JoinVertical(lipgloss.Left, title, "", commandsBox, instructions)
 
 	case HKStateConfirm:
-		title := TitleStyle.Render("═══ CONFIRM SELECTION ═══")
+		title := TitleStyle.Render("✓ CONFIRM SELECTION")
 
 		// Count selected
 		selectedCount := 0
@@ -440,38 +461,61 @@ func (m HousekeepingModel) View() string {
 		for _, item := range m.suggestions {
 			if item.Selected {
 				selectedCount++
-				selectedList = append(selectedList, fmt.Sprintf("  • %s", item.Command.Description))
+				selectedList = append(selectedList, SubtleTextStyle.Render("  ●")+" "+TextStyle.Render(item.Command.Description))
 			}
 		}
 
-		summary := fmt.Sprintf("Ready to add %d %s commands:\n\n%s\n\n",
-			selectedCount,
-			m.selectedCategory,
-			strings.Join(selectedList, "\n"))
+		countHeader := HeaderStyle.Render(fmt.Sprintf("Ready to add %d %s commands:", selectedCount, m.selectedCategory))
 
-		confirmText := summary + "Press Enter to add these commands, or 'q' to cancel."
-		instructions := HelpDescStyle.Render("\nEnter to confirm, q to quit")
+		summaryBox := BoxStyle.Width(70).Render(
+			lipgloss.JoinVertical(lipgloss.Left, selectedList...),
+		)
 
-		content = lipgloss.JoinVertical(lipgloss.Left, title, TextStyle.Render(confirmText), instructions)
+		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("enter confirm • q cancel")
+
+		content = lipgloss.JoinVertical(lipgloss.Left, title, "", countHeader, "", summaryBox, instructions)
 
 	case HKStateExecute:
-		title := TitleStyle.Render("═══ ADDING COMMANDS ═══")
-		executionText := TextStyle.Render("Adding selected commands to configuration...")
-		content = lipgloss.JoinVertical(lipgloss.Left, title, executionText)
+		title := TitleStyle.Render("⚙ PROCESSING")
+
+		spinner := SubtleTextStyle.Render("◐")
+		executionText := TextStyle.Render("  Adding selected commands to configuration...")
+
+		box := BoxStyle.Width(60).Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				spinner+" "+executionText,
+			),
+		)
+
+		content = lipgloss.JoinVertical(lipgloss.Left, title, "", box)
 
 	case HKStateComplete:
 		if m.err != nil {
-			title := TitleStyle.Render("═══ ERROR ═══")
-			errorText := TextStyle.Render(fmt.Sprintf("Error: %v\n\nPress Enter to exit.", m.err))
-			content = lipgloss.JoinVertical(lipgloss.Left, title, errorText)
+			title := ErrorStyle.Render("✗ ERROR")
+			errorMsg := ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
+
+			errorBox := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorError).
+				Padding(1, 2).
+				Width(60).
+				Render(errorMsg)
+
+			instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("enter exit")
+			content = lipgloss.JoinVertical(lipgloss.Left, title, "", errorBox, instructions)
 		} else {
-			title := TitleStyle.Render("═══ COMPLETE ═══")
-			successText := TextStyle.Render(fmt.Sprintf(
-				"Successfully added %d %s commands!\n\nPress Enter to exit.",
-				m.addedCount,
-				m.selectedCategory,
-			))
-			content = lipgloss.JoinVertical(lipgloss.Left, title, successText)
+			title := SuccessStyle.Render("✓ COMPLETE")
+			successMsg := SuccessStyle.Render(fmt.Sprintf("Successfully added %d %s commands!", m.addedCount, m.selectedCategory))
+
+			successBox := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorSuccess).
+				Padding(1, 2).
+				Width(60).
+				Render(successMsg)
+
+			instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("enter exit")
+			content = lipgloss.JoinVertical(lipgloss.Left, title, "", successBox, instructions)
 		}
 	}
 
