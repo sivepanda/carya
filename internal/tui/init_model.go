@@ -351,10 +351,13 @@ func (m *InitModel) View() string {
 		}
 	}
 
-	// Add help view at the bottom
-	m.help.ShowAll = m.showAll
-	helpView := m.help.View(m.keys)
-	help := HelpStyle.Render(helpView)
+	// Only show help view if explicitly toggled on
+	if m.showAll {
+		m.help.ShowAll = true
+		helpView := m.help.View(m.keys)
+		help := HelpStyle.Render(helpView)
+		return lipgloss.JoinVertical(lipgloss.Left, content, help)
+	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, content, help)
+	return content
 }
