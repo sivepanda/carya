@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 // Daemon manages a background process with PID file
@@ -31,15 +30,7 @@ func (d *Daemon) IsRunning() bool {
 		return false
 	}
 
-	// Check if process exists
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-
-	// Send signal 0 to check if process is alive
-	err = process.Signal(syscall.Signal(0))
-	return err == nil
+	return isProcessRunning(pid)
 }
 
 // ReadPID reads the PID from the PID file
@@ -94,20 +85,8 @@ func (d *Daemon) Start(args []string) error {
 
 	// Start the process in background
 	cmd := exec.Command(executable, args...)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid: true, // Create new session
-	}
 
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start daemon: %w", err)
-	}
-
-	// Don't wait for the process
-	go cmd.Wait()
-
-	return nil
+	return startProcess(cmd, logFile)
 }
 
 // Stop stops the running daemon
@@ -117,14 +96,8 @@ func (d *Daemon) Stop() error {
 		return fmt.Errorf("daemon is not running or PID file not found: %w", err)
 	}
 
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return fmt.Errorf("failed to find process: %w", err)
-	}
-
-	// Send SIGTERM
-	if err := process.Signal(syscall.SIGTERM); err != nil {
-		return fmt.Errorf("failed to stop daemon: %w", err)
+	if err := stopProcess(pid); err != nil {
+		return err
 	}
 
 	// Remove PID file
