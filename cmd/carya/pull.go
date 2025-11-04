@@ -37,7 +37,7 @@ var pullCmd = &cobra.Command{
 		// Notify user if housekeeping config changed
 		if housekeepingChanged {
 			fmt.Println("\n⚠️  Housekeeping configuration was updated during pull")
-			fmt.Println("The post-pull commands below reflect the new configuration.\n")
+			fmt.Println("The post-pull commands below reflect the new configuration.")
 		}
 
 		// Load and execute post-pull commands

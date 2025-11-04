@@ -37,7 +37,7 @@ var checkoutCmd = &cobra.Command{
 		// Notify user if housekeeping config changed
 		if housekeepingChanged {
 			fmt.Println("\n⚠️  Housekeeping configuration was updated during checkout")
-			fmt.Println("The post-checkout commands below reflect the new configuration.\n")
+			fmt.Println("The post-checkout commands below reflect the new configuration.")
 		}
 
 		// Load and execute post-checkout commands
