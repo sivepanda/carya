@@ -1,0 +1,71 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/carya
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    binary: carya
+
+archives:
+  - format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+
+# Distribution packages for Linux
+nfpms:
+  - id: packages
+    package_name: carya
+    homepage: https://github.com/sivepanda/carya
+    maintainer: sivepanda
+    description: Reimagining what's possible with version control software. Feature-based commits, housekeeping automation, and enhanced Git workflows.
+    license: MIT
+    formats:
+      - deb      # Debian/Ubuntu
+      - rpm      # RHEL/Fedora/CentOS
+      - archlinux # Arch Linux
+    bindir: /usr/bin
+    contents:
+      - src: ./README.md
+        dst: /usr/share/doc/carya/README.md
+
+# Homebrew tap for macOS
+brews:
+  - repository:
+      owner: sivepanda
+      name: homebrew-tap
+    name: carya
+    homepage: https://github.com/sivepanda/carya
+    description: Reimagining what's possible with version control software
+    license: MIT
+    skip_upload: auto
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'

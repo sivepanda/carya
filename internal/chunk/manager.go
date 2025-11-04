@@ -27,22 +27,33 @@ type EventEmitter interface {
 
 // Manager coordinates chunk creation, storage, and lifecycle management. It uses a ChunkStrategy to determine when to create chunks and manages periodic flushing of stale chunks.
 type Manager struct {
-	mu       sync.RWMutex  // Protects concurrent access to strategy
-	strategy ChunkStrategy // Strategy for creating chunks
-	store    ChunkStore    // Storage backend for chunks
-	emitter  EventEmitter  // Event emitter for notifications
-	ticker   *time.Ticker  // Timer for periodic flushing
-	stopCh   chan struct{} // Channel to signal shutdown
+	mu           sync.RWMutex  // Protects concurrent access to strategy
+	strategy     ChunkStrategy // Strategy for creating chunks
+	store        ChunkStore    // Storage backend for chunks
+	emitter      EventEmitter  // Event emitter for notifications
+	ticker       *time.Ticker  // Timer for periodic flushing
+	stopCh       chan struct{} // Channel to signal shutdown
+	lastActivity time.Time     // Time of last file change
+	isIdle       bool          // Whether system is in idle mode
+	idleThreshold time.Duration // Time before considering system idle
+	activeInterval time.Duration // Flush interval when active
+	idleInterval time.Duration // Flush interval when idle
 }
 
-// NewManager creates a new chunk manager with the specified strategy, store, and emitter. The manager will flush stale chunks every 5 minutes.
+// NewManager creates a new chunk manager with the specified strategy, store, and emitter. The manager will flush stale chunks every 5 minutes when active, and every 30 minutes when idle.
 func NewManager(strategy ChunkStrategy, store ChunkStore, emitter EventEmitter) *Manager {
+	activeInterval := 5 * time.Minute
 	return &Manager{
-		strategy: strategy,
-		store:    store,
-		emitter:  emitter,
-		ticker:   time.NewTicker(5 * time.Minute),
-		stopCh:   make(chan struct{}),
+		strategy:       strategy,
+		store:          store,
+		emitter:        emitter,
+		ticker:         time.NewTicker(activeInterval),
+		stopCh:         make(chan struct{}),
+		lastActivity:   time.Now(),
+		isIdle:         false,
+		idleThreshold:  5 * time.Minute,
+		activeInterval: activeInterval,
+		idleInterval:   30 * time.Minute,
 	}
 }
 
@@ -63,6 +74,13 @@ func (m *Manager) Stop() {
 func (m *Manager) OnFileChange(event FileChangeEvent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.lastActivity = time.Now()
+
+	// If we were idle, switch back to active mode
+	if m.isIdle {
+		m.switchToActiveMode()
+	}
 
 	m.strategy.OnFileChange(event)
 }
@@ -90,24 +108,66 @@ func (m *Manager) ForceFlush(filePath string) error {
 }
 
 // flushLoop runs in a separate goroutine and periodically flushes stale chunks.
+// Implements adaptive flushing: switches to idle mode after 5 minutes of inactivity.
 func (m *Manager) flushLoop() {
 	for {
 		select {
 		case <-m.ticker.C:
-			m.flushStaleChunks()
+			m.mu.Lock()
+			timeSinceActivity := time.Since(m.lastActivity)
+
+			// Check if we should switch to idle mode
+			if !m.isIdle && timeSinceActivity >= m.idleThreshold {
+				// Aggressive idle flush: flush everything immediately
+				m.flushAllChunksLocked()
+				m.switchToIdleMode()
+			} else if !m.isIdle {
+				// Normal active mode: flush stale chunks only
+				m.flushStaleChunksLocked()
+			}
+			// If already idle, just wait for activity (no flushing needed)
+
+			m.mu.Unlock()
 		case <-m.stopCh:
 			return
 		}
 	}
 }
 
-// flushStaleChunks identifies and saves stale chunks to the store.
+// flushStaleChunksLocked identifies and saves stale chunks to the store.
 // Continues processing even if individual chunks fail to save.
-func (m *Manager) flushStaleChunks() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+// Must be called with m.mu held.
+func (m *Manager) flushStaleChunksLocked() {
 	chunks := m.strategy.FlushStaleChunks(time.Now())
+	if len(chunks) == 0 {
+		return
+	}
+
+	for _, chunk := range chunks {
+		if err := m.store.SaveChunk(chunk); err != nil {
+			continue
+		}
+	}
+
+	if m.emitter != nil {
+		m.emitter.EmitChunkFlushed(chunks)
+	}
+}
+
+// flushAllChunksLocked immediately flushes all active chunks to storage.
+// Must be called with m.mu held.
+func (m *Manager) flushAllChunksLocked() {
+	// Check if strategy supports FlushAll
+	type flushAller interface {
+		FlushAll() []Chunk
+	}
+
+	fa, ok := m.strategy.(flushAller)
+	if !ok {
+		return
+	}
+
+	chunks := fa.FlushAll()
 	if len(chunks) == 0 {
 		return
 	}
@@ -128,30 +188,26 @@ func (m *Manager) FlushAll() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check if strategy supports FlushAll
-	type flushAller interface {
-		FlushAll() []Chunk
-	}
-
-	fa, ok := m.strategy.(flushAller)
-	if !ok {
-		return nil
-	}
-
-	chunks := fa.FlushAll()
-	if len(chunks) == 0 {
-		return nil
-	}
-
-	for _, chunk := range chunks {
-		if err := m.store.SaveChunk(chunk); err != nil {
-			return err
-		}
-	}
-
-	if m.emitter != nil {
-		m.emitter.EmitChunkFlushed(chunks)
-	}
-
+	m.flushAllChunksLocked()
 	return nil
+}
+
+// switchToIdleMode switches the ticker to idle mode (slower interval).
+// Must be called with m.mu held.
+func (m *Manager) switchToIdleMode() {
+	if m.isIdle {
+		return
+	}
+	m.isIdle = true
+	m.ticker.Reset(m.idleInterval)
+}
+
+// switchToActiveMode switches the ticker to active mode (faster interval).
+// Must be called with m.mu held.
+func (m *Manager) switchToActiveMode() {
+	if !m.isIdle {
+		return
+	}
+	m.isIdle = false
+	m.ticker.Reset(m.activeInterval)
 }

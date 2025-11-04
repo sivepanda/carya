@@ -1,15 +1,21 @@
 package housekeeping
 
 import (
+	_ "embed"
+	"encoding/json"
 	"os"
 	"path/filepath"
 )
 
+//go:embed autodetect.json
+var autodetectJSON []byte
+
 // PackageType represents a detected package manager or build system
 type PackageType struct {
-	Name        string
-	DetectFile  string
-	Description string
+	Name        string                       `json:"name"`
+	DetectFile  string                       `json:"detectFile"`
+	Description string                       `json:"description"`
+	Commands    map[string][]Command         `json:"commands"`
 }
 
 // DetectedPackage contains information about a detected package system
@@ -18,22 +24,25 @@ type DetectedPackage struct {
 	Path string
 }
 
-// Common package types and their detection files
-var PackageTypes = []PackageType{
-	{Name: "npm", DetectFile: "package.json", Description: "Node.js (npm)"},
-	{Name: "yarn", DetectFile: "yarn.lock", Description: "Node.js (Yarn)"},
-	{Name: "pnpm", DetectFile: "pnpm-lock.yaml", Description: "Node.js (pnpm)"},
-	{Name: "go", DetectFile: "go.mod", Description: "Go Modules"},
-	{Name: "python-pip", DetectFile: "requirements.txt", Description: "Python (pip)"},
-	{Name: "python-poetry", DetectFile: "pyproject.toml", Description: "Python (Poetry)"},
-	{Name: "python-pipenv", DetectFile: "Pipfile", Description: "Python (Pipenv)"},
-	{Name: "rust", DetectFile: "Cargo.toml", Description: "Rust (Cargo)"},
-	{Name: "ruby", DetectFile: "Gemfile", Description: "Ruby (Bundler)"},
-	{Name: "php-composer", DetectFile: "composer.json", Description: "PHP (Composer)"},
-	{Name: "java-maven", DetectFile: "pom.xml", Description: "Java (Maven)"},
-	{Name: "java-gradle", DetectFile: "build.gradle", Description: "Java/Kotlin (Gradle)"},
-	{Name: "dotnet", DetectFile: "*.csproj", Description: ".NET"},
-	{Name: "elixir", DetectFile: "mix.exs", Description: "Elixir (Mix)"},
+// loadPackageTypes loads package types from embedded JSON
+func loadPackageTypes() ([]PackageType, error) {
+	var types []PackageType
+	if err := json.Unmarshal(autodetectJSON, &types); err != nil {
+		return nil, err
+	}
+	return types, nil
+}
+
+// PackageTypes returns all configured package types
+var PackageTypes []PackageType
+
+func init() {
+	var err error
+	PackageTypes, err = loadPackageTypes()
+	if err != nil {
+		// Fall back to empty slice on error
+		PackageTypes = []PackageType{}
+	}
 }
 
 // Detector scans the project directory for package managers
@@ -99,127 +108,14 @@ func (d *Detector) GetSuggestedCommands(category string) ([]Command, error) {
 
 // getCommandsForPackage returns housekeeping commands for a specific package type
 func getCommandsForPackage(pkgName, category string) []Command {
-	templates := map[string]map[string][]Command{
-		"npm": {
-			"post-pull": {
-				{Command: "npm install", WorkingDir: ".", Description: "Install npm dependencies"},
-			},
-			"post-checkout": {
-				{Command: "npm install", WorkingDir: ".", Description: "Install npm dependencies"},
-			},
-		},
-		"yarn": {
-			"post-pull": {
-				{Command: "yarn install", WorkingDir: ".", Description: "Install Yarn dependencies"},
-			},
-			"post-checkout": {
-				{Command: "yarn install", WorkingDir: ".", Description: "Install Yarn dependencies"},
-			},
-		},
-		"pnpm": {
-			"post-pull": {
-				{Command: "pnpm install", WorkingDir: ".", Description: "Install pnpm dependencies"},
-			},
-			"post-checkout": {
-				{Command: "pnpm install", WorkingDir: ".", Description: "Install pnpm dependencies"},
-			},
-		},
-		"go": {
-			"post-pull": {
-				{Command: "go mod download", WorkingDir: ".", Description: "Download Go dependencies"},
-				{Command: "go mod tidy", WorkingDir: ".", Description: "Clean up Go dependencies"},
-			},
-			"post-checkout": {
-				{Command: "go mod download", WorkingDir: ".", Description: "Download Go dependencies"},
-			},
-		},
-		"python-pip": {
-			"post-pull": {
-				{Command: "pip install -r requirements.txt", WorkingDir: ".", Description: "Install Python dependencies"},
-			},
-			"post-checkout": {
-				{Command: "pip install -r requirements.txt", WorkingDir: ".", Description: "Install Python dependencies"},
-			},
-		},
-		"python-poetry": {
-			"post-pull": {
-				{Command: "poetry install", WorkingDir: ".", Description: "Install Poetry dependencies"},
-			},
-			"post-checkout": {
-				{Command: "poetry install", WorkingDir: ".", Description: "Install Poetry dependencies"},
-			},
-		},
-		"python-pipenv": {
-			"post-pull": {
-				{Command: "pipenv install", WorkingDir: ".", Description: "Install Pipenv dependencies"},
-			},
-			"post-checkout": {
-				{Command: "pipenv install", WorkingDir: ".", Description: "Install Pipenv dependencies"},
-			},
-		},
-		"rust": {
-			"post-pull": {
-				{Command: "cargo build", WorkingDir: ".", Description: "Build Rust project"},
-			},
-			"post-checkout": {
-				{Command: "cargo build", WorkingDir: ".", Description: "Build Rust project"},
-			},
-		},
-		"ruby": {
-			"post-pull": {
-				{Command: "bundle install", WorkingDir: ".", Description: "Install Ruby gems"},
-			},
-			"post-checkout": {
-				{Command: "bundle install", WorkingDir: ".", Description: "Install Ruby gems"},
-			},
-		},
-		"php-composer": {
-			"post-pull": {
-				{Command: "composer install", WorkingDir: ".", Description: "Install Composer dependencies"},
-			},
-			"post-checkout": {
-				{Command: "composer install", WorkingDir: ".", Description: "Install Composer dependencies"},
-			},
-		},
-		"java-maven": {
-			"post-pull": {
-				{Command: "mvn clean install", WorkingDir: ".", Description: "Build Maven project"},
-			},
-			"post-checkout": {
-				{Command: "mvn clean install", WorkingDir: ".", Description: "Build Maven project"},
-			},
-		},
-		"java-gradle": {
-			"post-pull": {
-				{Command: "./gradlew build", WorkingDir: ".", Description: "Build Gradle project"},
-			},
-			"post-checkout": {
-				{Command: "./gradlew build", WorkingDir: ".", Description: "Build Gradle project"},
-			},
-		},
-		"dotnet": {
-			"post-pull": {
-				{Command: "dotnet restore", WorkingDir: ".", Description: "Restore .NET dependencies"},
-			},
-			"post-checkout": {
-				{Command: "dotnet restore", WorkingDir: ".", Description: "Restore .NET dependencies"},
-			},
-		},
-		"elixir": {
-			"post-pull": {
-				{Command: "mix deps.get", WorkingDir: ".", Description: "Get Elixir dependencies"},
-			},
-			"post-checkout": {
-				{Command: "mix deps.get", WorkingDir: ".", Description: "Get Elixir dependencies"},
-			},
-		},
-	}
-
-	if categoryCommands, exists := templates[pkgName]; exists {
-		if commands, exists := categoryCommands[category]; exists {
-			return commands
+	// Find the package type by name
+	for _, pkgType := range PackageTypes {
+		if pkgType.Name == pkgName {
+			if commands, exists := pkgType.Commands[category]; exists {
+				return commands
+			}
+			break
 		}
 	}
-
 	return []Command{}
 }

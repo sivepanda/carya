@@ -14,9 +14,11 @@ type Command struct {
 }
 
 type Config struct {
-	Version      string    `json:"version"`
-	PostPull     []Command `json:"post-pull"`
-	PostCheckout []Command `json:"post-checkout"`
+	Version            string    `json:"version"`
+	AutoApprovePostPull     bool      `json:"auto_approve_post_pull,omitempty"`
+	AutoApprovePostCheckout bool      `json:"auto_approve_post_checkout,omitempty"`
+	PostPull           []Command `json:"post-pull"`
+	PostCheckout       []Command `json:"post-checkout"`
 }
 
 const (
@@ -114,5 +116,16 @@ func (c *Config) GetCommands(category string) ([]Command, error) {
 		return c.PostCheckout, nil
 	default:
 		return nil, fmt.Errorf("unknown category: %s", category)
+	}
+}
+
+func (c *Config) IsAutoApprove(category string) bool {
+	switch category {
+	case "post-pull":
+		return c.AutoApprovePostPull
+	case "post-checkout":
+		return c.AutoApprovePostCheckout
+	default:
+		return false
 	}
 }

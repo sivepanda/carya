@@ -1,0 +1,332 @@
+[
+  {
+    "name": "npm",
+    "detectFile": "package.json",
+    "description": "Node.js (npm)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "npm install",
+          "workingDir": ".",
+          "description": "Install npm dependencies"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "npm install",
+          "workingDir": ".",
+          "description": "Install npm dependencies"
+        }
+      ]
+    }
+  },
+  {
+    "name": "yarn",
+    "detectFile": "yarn.lock",
+    "description": "Node.js (Yarn)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "yarn install",
+          "workingDir": ".",
+          "description": "Install Yarn dependencies"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "yarn install",
+          "workingDir": ".",
+          "description": "Install Yarn dependencies"
+        }
+      ]
+    }
+  },
+  {
+    "name": "pnpm",
+    "detectFile": "pnpm-lock.yaml",
+    "description": "Node.js (pnpm)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "pnpm install",
+          "workingDir": ".",
+          "description": "Install pnpm dependencies"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "pnpm install",
+          "workingDir": ".",
+          "description": "Install pnpm dependencies"
+        }
+      ]
+    }
+  },
+  {
+    "name": "go",
+    "detectFile": "go.mod",
+    "description": "Go Modules",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "go mod download",
+          "workingDir": ".",
+          "description": "Download Go dependencies"
+        },
+        {
+          "command": "go mod tidy",
+          "workingDir": ".",
+          "description": "Clean up Go dependencies"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "go mod download",
+          "workingDir": ".",
+          "description": "Download Go dependencies"
+        }
+      ]
+    }
+  },
+  {
+    "name": "python-pip",
+    "detectFile": "requirements.txt",
+    "description": "Python (pip)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "pip install -r requirements.txt",
+          "workingDir": ".",
+          "description": "Install Python dependencies"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "pip install -r requirements.txt",
+          "workingDir": ".",
+          "description": "Install Python dependencies"
+        }
+      ]
+    }
+  },
+  {
+    "name": "python-poetry",
+    "detectFile": "pyproject.toml",
+    "description": "Python (Poetry)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "poetry install",
+          "workingDir": ".",
+          "description": "Install Poetry dependencies"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "poetry install",
+          "workingDir": ".",
+          "description": "Install Poetry dependencies"
+        }
+      ]
+    }
+  },
+  {
+    "name": "python-pipenv",
+    "detectFile": "Pipfile",
+    "description": "Python (Pipenv)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "pipenv install",
+          "workingDir": ".",
+          "description": "Install Pipenv dependencies"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "pipenv install",
+          "workingDir": ".",
+          "description": "Install Pipenv dependencies"
+        }
+      ]
+    }
+  },
+  {
+    "name": "rust",
+    "detectFile": "Cargo.toml",
+    "description": "Rust (Cargo)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "cargo build",
+          "workingDir": ".",
+          "description": "Build Rust project"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "cargo build",
+          "workingDir": ".",
+          "description": "Build Rust project"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ruby",
+    "detectFile": "Gemfile",
+    "description": "Ruby (Bundler)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "bundle install",
+          "workingDir": ".",
+          "description": "Install Ruby gems"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "bundle install",
+          "workingDir": ".",
+          "description": "Install Ruby gems"
+        }
+      ]
+    }
+  },
+  {
+    "name": "php-composer",
+    "detectFile": "composer.json",
+    "description": "PHP (Composer)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "composer install",
+          "workingDir": ".",
+          "description": "Install Composer dependencies"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "composer install",
+          "workingDir": ".",
+          "description": "Install Composer dependencies"
+        }
+      ]
+    }
+  },
+  {
+    "name": "java-maven",
+    "detectFile": "pom.xml",
+    "description": "Java (Maven)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "mvn clean install",
+          "workingDir": ".",
+          "description": "Build Maven project"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "mvn clean install",
+          "workingDir": ".",
+          "description": "Build Maven project"
+        }
+      ]
+    }
+  },
+  {
+    "name": "java-gradle",
+    "detectFile": "build.gradle",
+    "description": "Java/Kotlin (Gradle)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "./gradlew build",
+          "workingDir": ".",
+          "description": "Build Gradle project"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "./gradlew build",
+          "workingDir": ".",
+          "description": "Build Gradle project"
+        }
+      ]
+    }
+  },
+  {
+    "name": "dotnet",
+    "detectFile": "*.csproj",
+    "description": ".NET",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "dotnet restore",
+          "workingDir": ".",
+          "description": "Restore .NET dependencies"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "dotnet restore",
+          "workingDir": ".",
+          "description": "Restore .NET dependencies"
+        }
+      ]
+    }
+  },
+  {
+    "name": "elixir",
+    "detectFile": "mix.exs",
+    "description": "Elixir (Mix)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "mix deps.get",
+          "workingDir": ".",
+          "description": "Get Elixir dependencies"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "mix deps.get",
+          "workingDir": ".",
+          "description": "Get Elixir dependencies"
+        }
+      ]
+    }
+  },
+  {
+    "name": "prisma",
+    "detectFile": "prisma/schema.prisma",
+    "description": "Prisma ORM",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "prisma generate",
+          "workingDir": ".",
+          "description": "Generate Prisma Client"
+        },
+        {
+          "command": "prisma migrate deploy",
+          "workingDir": ".",
+          "description": "Apply Prisma migrations"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "prisma generate",
+          "workingDir": ".",
+          "description": "Generate Prisma Client"
+        },
+        {
+          "command": "prisma migrate deploy",
+          "workingDir": ".",
+          "description": "Apply Prisma migrations"
+        }
+      ]
+    }
+  }
+]

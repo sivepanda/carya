@@ -30,6 +30,12 @@ type SuggestionItem struct {
 	Selected bool
 }
 
+// CategoryItem represents a category with selection state
+type CategoryItem struct {
+	Name     string
+	Selected bool
+}
+
 // HousekeepingModel represents the Bubble Tea model for housekeeping setup
 type HousekeepingModel struct {
 	help              help.Model
@@ -38,9 +44,9 @@ type HousekeepingModel struct {
 	cursor            int
 	detector          *housekeeping.Detector
 	detected          []housekeeping.DetectedPackage
-	selectedCategory  string
-	categoryOptions   []string
+	categories        []CategoryItem
 	categoryCursor    int
+	currentCategory   int // Index for multi-category processing
 	suggestions       []SuggestionItem
 	err               error
 	width             int
@@ -61,12 +67,15 @@ func NewHousekeepingModel() HousekeepingModel {
 	detector := housekeeping.NewDetector(".")
 
 	m := HousekeepingModel{
-		help:            h,
-		keys:            DefaultKeys(),
-		state:           HKStateDetecting,
-		detector:        detector,
-		width:           80,
-		categoryOptions: []string{"post-pull", "post-checkout"},
+		help:     h,
+		keys:     DefaultKeys(),
+		state:    HKStateDetecting,
+		detector: detector,
+		width:    80,
+		categories: []CategoryItem{
+			{Name: "post-pull", Selected: true},
+			{Name: "post-checkout", Selected: true},
+		},
 	}
 
 	return m
@@ -154,10 +163,11 @@ func (m HousekeepingModel) detectPackages() tea.Cmd {
 	}
 }
 
-// getSuggestions retrieves suggestions for the selected category
+// getSuggestions retrieves suggestions for the current category being processed
 func (m HousekeepingModel) getSuggestions() tea.Cmd {
 	return func() tea.Msg {
-		suggestions, err := m.detector.GetSuggestedCommands(m.selectedCategory)
+		categoryName := m.categories[m.currentCategory].Name
+		suggestions, err := m.detector.GetSuggestedCommands(categoryName)
 		if err != nil {
 			return SuggestionsLoadedMsg{Error: err}
 		}
@@ -171,6 +181,7 @@ func (m HousekeepingModel) getSuggestions() tea.Cmd {
 		}
 
 		return SuggestionsLoadedMsg{
+			Category:    categoryName,
 			Suggestions: items,
 			Error:       nil,
 		}
@@ -180,11 +191,12 @@ func (m HousekeepingModel) getSuggestions() tea.Cmd {
 // addSelectedCommands adds the selected commands to the config
 func (m HousekeepingModel) addSelectedCommands() tea.Cmd {
 	return func() tea.Msg {
+		categoryName := m.categories[m.currentCategory].Name
 		count := 0
 		for _, item := range m.suggestions {
 			if item.Selected {
 				err := m.config.AddCommand(
-					m.selectedCategory,
+					categoryName,
 					item.Command.Command,
 					item.Command.WorkingDir,
 					item.Command.Description,
@@ -203,7 +215,11 @@ func (m HousekeepingModel) addSelectedCommands() tea.Cmd {
 			}
 		}
 
-		return CommandsAddedMsg{Count: count, Error: nil}
+		return CommandsAddedMsg{
+			Count:    count,
+			Category: categoryName,
+			Error:    nil,
+		}
 	}
 }
 
@@ -216,14 +232,16 @@ type DetectionCompleteMsg struct {
 
 // SuggestionsLoadedMsg indicates suggestions have been loaded
 type SuggestionsLoadedMsg struct {
+	Category    string
 	Suggestions []SuggestionItem
 	Error       error
 }
 
 // CommandsAddedMsg indicates commands have been added
 type CommandsAddedMsg struct {
-	Count int
-	Error error
+	Count    int
+	Category string
+	Error    error
 }
 
 // Update handles messages and updates the model
@@ -257,7 +275,7 @@ func (m HousekeepingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 
 		if len(m.suggestions) == 0 {
-			m.err = fmt.Errorf("no suggestions for %s", m.selectedCategory)
+			m.err = fmt.Errorf("no suggestions for %s", msg.Category)
 			m.state = HKStateComplete
 			return m, nil
 		}
@@ -268,8 +286,23 @@ func (m HousekeepingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CommandsAddedMsg:
 		if msg.Error != nil {
 			m.err = msg.Error
+			m.state = HKStateComplete
+			return m, nil
 		}
-		m.addedCount = msg.Count
+		m.addedCount += msg.Count
+
+		// Find next selected category
+		m.currentCategory++
+		for m.currentCategory < len(m.categories) && !m.categories[m.currentCategory].Selected {
+			m.currentCategory++
+		}
+
+		// If there are more categories to process, get suggestions for the next one
+		if m.currentCategory < len(m.categories) {
+			return m, m.getSuggestions()
+		}
+
+		// All categories processed
 		m.state = HKStateComplete
 		return m, nil
 
@@ -300,7 +333,7 @@ func (m HousekeepingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.Down):
 			if m.state == HKStateCategorySelect {
-				if m.categoryCursor < len(m.categoryOptions)-1 {
+				if m.categoryCursor < len(m.categories)-1 {
 					m.categoryCursor++
 				}
 			} else if m.state == HKStateCommandSelect {
@@ -310,14 +343,31 @@ func (m HousekeepingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.Select):
-			if m.state == HKStateCommandSelect {
+			if m.state == HKStateCategorySelect {
+				m.categories[m.categoryCursor].Selected = !m.categories[m.categoryCursor].Selected
+			} else if m.state == HKStateCommandSelect {
 				m.suggestions[m.cursor].Selected = !m.suggestions[m.cursor].Selected
 			}
 
 		case key.Matches(msg, m.keys.Enter):
 			switch m.state {
 			case HKStateCategorySelect:
-				m.selectedCategory = m.categoryOptions[m.categoryCursor]
+				// Check if any categories are selected
+				hasSelected := false
+				for i, cat := range m.categories {
+					if cat.Selected {
+						hasSelected = true
+						m.currentCategory = i
+						break
+					}
+				}
+
+				if !hasSelected {
+					m.err = fmt.Errorf("no categories selected")
+					m.state = HKStateComplete
+					return m, nil
+				}
+
 				return m, m.getSuggestions()
 
 			case HKStateCommandSelect:
@@ -358,9 +408,9 @@ func (m HousekeepingModel) View() string {
 
 	switch m.state {
 	case HKStateDetecting:
-		title := TitleStyle.Render("⚙ HOUSEKEEPING SETUP")
+		title := TitleStyle.Render(IconSettings + " HOUSEKEEPING SETUP")
 
-		spinner := SubtleTextStyle.Render("◐")
+		spinner := SubtleTextStyle.Render(IconSpinner)
 		detectingText := TextStyle.Render("  Detecting package managers and build systems...")
 
 		box := BoxStyle.Width(60).Render(
@@ -372,12 +422,12 @@ func (m HousekeepingModel) View() string {
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", box)
 
 	case HKStateCategorySelect:
-		title := TitleStyle.Render("✓ DETECTED PACKAGES")
+		title := TitleStyle.Render(IconCheck + " DETECTED PACKAGES")
 
 		// Show detected packages in a box
 		var detectedList []string
 		for _, pkg := range m.detected {
-			detectedList = append(detectedList, SubtleTextStyle.Render("  ●")+" "+TextStyle.Render(pkg.Type.Description))
+			detectedList = append(detectedList, SubtleTextStyle.Render("  "+IconBullet)+" "+TextStyle.Render(pkg.Type.Description))
 		}
 
 		packagesBox := DimBoxStyle.Width(60).Render(
@@ -385,16 +435,21 @@ func (m HousekeepingModel) View() string {
 		)
 
 		// Show category selection
-		categoryTitle := HeaderStyle.Margin(2, 0, 1, 0).Render("Select category:")
+		categoryTitle := HeaderStyle.Margin(SectionGap, 0, ComponentGap, 0).Render("Select categories to configure:")
 
 		var options []string
-		for i, category := range m.categoryOptions {
+		for i, category := range m.categories {
 			cursor := "  "
 			if m.categoryCursor == i {
-				cursor = "❯ "
+				cursor = IconCursor + " "
 			}
 
-			line := cursor + category
+			checkbox := IconCheckbox
+			if category.Selected {
+				checkbox = IconChecked
+			}
+
+			line := cursor + checkbox + " " + category.Name
 			if m.categoryCursor == i {
 				line = SelectedItemStyle.Render(line)
 			} else {
@@ -407,23 +462,24 @@ func (m HousekeepingModel) View() string {
 			lipgloss.JoinVertical(lipgloss.Left, options...),
 		)
 
-		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("↑/↓ navigate • enter select")
+		instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", packagesBox, categoryTitle, optionsBox, instructions)
 
 	case HKStateCommandSelect:
-		title := TitleStyle.Render(fmt.Sprintf("⚡ %s COMMANDS", strings.ToUpper(m.selectedCategory)))
+		currentCategoryName := m.categories[m.currentCategory].Name
+		title := TitleStyle.Render(fmt.Sprintf(IconSettings+" %s COMMANDS", strings.ToUpper(currentCategoryName)))
 
 		var options []string
 		for i, item := range m.suggestions {
 			cursor := "  "
 			if m.cursor == i {
-				cursor = "❯ "
+				cursor = IconCursor + " "
 			}
 
-			checkbox := "☐"
+			checkbox := IconCheckbox
 			if item.Selected {
-				checkbox = "☑"
+				checkbox = IconChecked
 			}
 
 			line := cursor + checkbox + " " + item.Command.Description
@@ -448,12 +504,12 @@ func (m HousekeepingModel) View() string {
 			lipgloss.JoinVertical(lipgloss.Left, options...),
 		)
 
-		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
+		instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", commandsBox, instructions)
 
 	case HKStateConfirm:
-		title := TitleStyle.Render("✓ CONFIRM SELECTION")
+		title := TitleStyle.Render(IconCheck + " CONFIRM SELECTION")
 
 		// Count selected
 		selectedCount := 0
@@ -461,24 +517,25 @@ func (m HousekeepingModel) View() string {
 		for _, item := range m.suggestions {
 			if item.Selected {
 				selectedCount++
-				selectedList = append(selectedList, SubtleTextStyle.Render("  ●")+" "+TextStyle.Render(item.Command.Description))
+				selectedList = append(selectedList, SubtleTextStyle.Render("  "+IconBullet)+" "+TextStyle.Render(item.Command.Description))
 			}
 		}
 
-		countHeader := HeaderStyle.Render(fmt.Sprintf("Ready to add %d %s commands:", selectedCount, m.selectedCategory))
+		currentCategoryName := m.categories[m.currentCategory].Name
+		countHeader := HeaderStyle.Render(fmt.Sprintf("Ready to add %d %s commands:", selectedCount, currentCategoryName))
 
 		summaryBox := BoxStyle.Width(70).Render(
 			lipgloss.JoinVertical(lipgloss.Left, selectedList...),
 		)
 
-		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("enter confirm • q cancel")
+		instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("enter confirm • q cancel")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", countHeader, "", summaryBox, instructions)
 
 	case HKStateExecute:
-		title := TitleStyle.Render("⚙ PROCESSING")
+		title := TitleStyle.Render(IconSettings + " PROCESSING")
 
-		spinner := SubtleTextStyle.Render("◐")
+		spinner := SubtleTextStyle.Render(IconSpinner)
 		executionText := TextStyle.Render("  Adding selected commands to configuration...")
 
 		box := BoxStyle.Width(60).Render(
@@ -491,30 +548,40 @@ func (m HousekeepingModel) View() string {
 
 	case HKStateComplete:
 		if m.err != nil {
-			title := ErrorStyle.Render("✗ ERROR")
+			title := ErrorStyle.Render(IconCross + " ERROR")
 			errorMsg := ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
 
 			errorBox := lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(ColorError).
-				Padding(1, 2).
+				Padding(DefaultPadding, DefaultPadding*2).
 				Width(60).
 				Render(errorMsg)
 
-			instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("enter exit")
+			instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("enter exit")
 			content = lipgloss.JoinVertical(lipgloss.Left, title, "", errorBox, instructions)
 		} else {
-			title := SuccessStyle.Render("✓ COMPLETE")
-			successMsg := SuccessStyle.Render(fmt.Sprintf("Successfully added %d %s commands!", m.addedCount, m.selectedCategory))
+			title := SuccessStyle.Render(IconCheck + " COMPLETE")
+
+			// Count how many categories were selected
+			selectedCategories := []string{}
+			for _, cat := range m.categories {
+				if cat.Selected {
+					selectedCategories = append(selectedCategories, cat.Name)
+				}
+			}
+
+			categoryText := strings.Join(selectedCategories, " and ")
+			successMsg := SuccessStyle.Render(fmt.Sprintf("Successfully added %d commands for %s!", m.addedCount, categoryText))
 
 			successBox := lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(ColorSuccess).
-				Padding(1, 2).
+				Padding(DefaultPadding, DefaultPadding*2).
 				Width(60).
 				Render(successMsg)
 
-			instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("enter exit")
+			instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("enter exit")
 			content = lipgloss.JoinVertical(lipgloss.Left, title, "", successBox, instructions)
 		}
 	}
