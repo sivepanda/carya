@@ -7,7 +7,6 @@ before:
 builds:
   - main: ./cmd/carya
     env:
-      - GORELEASER_GITHUB_TOKEN: ${{ secrets.BREW_TAP}}
       - CGO_ENABLED=0
     goos:
       - linux
