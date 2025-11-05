@@ -14,6 +14,8 @@ var autodetectJSON []byte
 type PackageType struct {
 	Name        string                       `json:"name"`
 	DetectFile  string                       `json:"detectFile"`
+	DetectFiles []string                     `json:"detectFiles,omitempty"` // Multiple files, all must exist
+	Excludes    []string                     `json:"excludes,omitempty"`    // Package managers to exclude when this is detected
 	Description string                       `json:"description"`
 	Commands    map[string][]Command         `json:"commands"`
 }
@@ -63,6 +65,29 @@ func (d *Detector) DetectPackages() ([]DetectedPackage, error) {
 	var detected []DetectedPackage
 
 	for _, pkgType := range PackageTypes {
+		// Check for multiple required files (all must exist)
+		if len(pkgType.DetectFiles) > 0 {
+			allExist := true
+			var firstPath string
+			for i, file := range pkgType.DetectFiles {
+				filePath := filepath.Join(d.rootDir, file)
+				if _, err := os.Stat(filePath); err != nil {
+					allExist = false
+					break
+				}
+				if i == 0 {
+					firstPath = filePath
+				}
+			}
+			if allExist {
+				detected = append(detected, DetectedPackage{
+					Type: pkgType,
+					Path: firstPath,
+				})
+			}
+			continue
+		}
+
 		// Handle glob patterns (like *.csproj)
 		if filepath.Base(pkgType.DetectFile) != pkgType.DetectFile &&
 		   (pkgType.DetectFile[0] == '*' || pkgType.DetectFile == "*.csproj") {
@@ -86,7 +111,39 @@ func (d *Detector) DetectPackages() ([]DetectedPackage, error) {
 		}
 	}
 
+	// Apply exclusions
+	detected = applyExclusions(detected)
+
 	return detected, nil
+}
+
+// applyExclusions filters out packages based on exclusion rules
+func applyExclusions(detected []DetectedPackage) []DetectedPackage {
+	// Build a set of all detected package names
+	detectedNames := make(map[string]bool)
+	for _, pkg := range detected {
+		detectedNames[pkg.Type.Name] = true
+	}
+
+	// Collect all packages that should be excluded
+	excludedNames := make(map[string]bool)
+	for _, pkg := range detected {
+		for _, excludeName := range pkg.Type.Excludes {
+			if detectedNames[excludeName] {
+				excludedNames[excludeName] = true
+			}
+		}
+	}
+
+	// Filter out excluded packages
+	var filtered []DetectedPackage
+	for _, pkg := range detected {
+		if !excludedNames[pkg.Type.Name] {
+			filtered = append(filtered, pkg)
+		}
+	}
+
+	return filtered
 }
 
 // GetSuggestedCommands returns suggested housekeeping commands based on detected packages

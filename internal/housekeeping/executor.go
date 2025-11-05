@@ -89,7 +89,13 @@ func (e *Executor) filterCommandsByChangedFiles(commands []Command, changedFiles
 	// Build a map of package detect files to check
 	detectFileMap := make(map[string]bool)
 	for _, pkgType := range PackageTypes {
-		detectFileMap[pkgType.DetectFile] = true
+		if pkgType.DetectFile != "" {
+			detectFileMap[pkgType.DetectFile] = true
+		}
+		// Also add all files from detectFiles array
+		for _, file := range pkgType.DetectFiles {
+			detectFileMap[file] = true
+		}
 	}
 
 	// Check which detect files are in the changed files list
@@ -108,11 +114,25 @@ func (e *Executor) filterCommandsByChangedFiles(commands []Command, changedFiles
 	for _, cmd := range commands {
 		// Find which package type this command belongs to
 		for _, pkgType := range PackageTypes {
-			for _, categoryCommands := range pkgType.Commands {
-				for _, pkgCmd := range categoryCommands {
-					if pkgCmd.Command == cmd.Command && changedDetectFiles[pkgType.DetectFile] {
-						filtered = append(filtered, cmd)
-						goto nextCommand
+			// Check if any of this package's detect files changed
+			hasChangedFile := false
+			if pkgType.DetectFile != "" && changedDetectFiles[pkgType.DetectFile] {
+				hasChangedFile = true
+			}
+			for _, file := range pkgType.DetectFiles {
+				if changedDetectFiles[file] {
+					hasChangedFile = true
+					break
+				}
+			}
+
+			if hasChangedFile {
+				for _, categoryCommands := range pkgType.Commands {
+					for _, pkgCmd := range categoryCommands {
+						if pkgCmd.Command == cmd.Command {
+							filtered = append(filtered, cmd)
+							goto nextCommand
+						}
 					}
 				}
 			}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -17,8 +18,10 @@ import (
 // Screen states for housekeeping
 const (
 	HKStateDetecting = iota
+	HKStatePackageSelect
 	HKStateCategorySelect
 	HKStateCommandSelect
+	HKStateManualInput
 	HKStateConfirm
 	HKStateExecute
 	HKStateComplete
@@ -36,6 +39,12 @@ type CategoryItem struct {
 	Selected bool
 }
 
+// PackageItem represents a detected package with selection state
+type PackageItem struct {
+	Package  housekeeping.DetectedPackage
+	Selected bool
+}
+
 // HousekeepingModel represents the Bubble Tea model for housekeeping setup
 type HousekeepingModel struct {
 	help              help.Model
@@ -44,10 +53,15 @@ type HousekeepingModel struct {
 	cursor            int
 	detector          *housekeeping.Detector
 	detected          []housekeeping.DetectedPackage
+	packages          []PackageItem // Detected packages with selection state
+	packageCursor     int
 	categories        []CategoryItem
 	categoryCursor    int
 	currentCategory   int // Index for multi-category processing
 	suggestions       []SuggestionItem
+	manualInput       textinput.Model
+	manualInputs      []textinput.Model // For command, workingDir, description
+	manualInputFocus  int
 	err               error
 	width             int
 	height            int
@@ -66,6 +80,23 @@ func NewHousekeepingModel() HousekeepingModel {
 
 	detector := housekeeping.NewDetector(".")
 
+	// Initialize text inputs for manual command entry
+	commandInput := textinput.New()
+	commandInput.Placeholder = "e.g., npm run build"
+	commandInput.Focus()
+	commandInput.CharLimit = 256
+	commandInput.Width = 50
+
+	workingDirInput := textinput.New()
+	workingDirInput.Placeholder = "e.g., ."
+	workingDirInput.CharLimit = 256
+	workingDirInput.Width = 50
+
+	descriptionInput := textinput.New()
+	descriptionInput.Placeholder = "e.g., Build the project"
+	descriptionInput.CharLimit = 256
+	descriptionInput.Width = 50
+
 	m := HousekeepingModel{
 		help:     h,
 		keys:     DefaultKeys(),
@@ -76,6 +107,7 @@ func NewHousekeepingModel() HousekeepingModel {
 			{Name: "post-pull", Selected: true},
 			{Name: "post-checkout", Selected: true},
 		},
+		manualInputs: []textinput.Model{commandInput, workingDirInput, descriptionInput},
 	}
 
 	return m
@@ -167,9 +199,20 @@ func (m HousekeepingModel) detectPackages() tea.Cmd {
 func (m HousekeepingModel) getSuggestions() tea.Cmd {
 	return func() tea.Msg {
 		categoryName := m.categories[m.currentCategory].Name
-		suggestions, err := m.detector.GetSuggestedCommands(categoryName)
-		if err != nil {
-			return SuggestionsLoadedMsg{Error: err}
+
+		// Get suggestions only from selected packages
+		var suggestions []housekeeping.Command
+		for _, pkgItem := range m.packages {
+			if pkgItem.Selected {
+				for _, pkgType := range housekeeping.PackageTypes {
+					if pkgType.Name == pkgItem.Package.Type.Name {
+						if commands, exists := pkgType.Commands[categoryName]; exists {
+							suggestions = append(suggestions, commands...)
+						}
+						break
+					}
+				}
+			}
 		}
 
 		items := make([]SuggestionItem, len(suggestions))
@@ -262,7 +305,16 @@ func (m HousekeepingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		m.state = HKStateCategorySelect
+		// Initialize package items with all selected by default
+		m.packages = make([]PackageItem, len(m.detected))
+		for i, pkg := range m.detected {
+			m.packages[i] = PackageItem{
+				Package:  pkg,
+				Selected: true,
+			}
+		}
+
+		m.state = HKStatePackageSelect
 		return m, nil
 
 	case SuggestionsLoadedMsg:
@@ -312,6 +364,81 @@ func (m HousekeepingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Handle manual input state specially
+		if m.state == HKStateManualInput {
+			switch msg.String() {
+			case "esc":
+				// Cancel and go back to command select
+				m.state = HKStateCommandSelect
+				// Reset inputs
+				for i := range m.manualInputs {
+					m.manualInputs[i].SetValue("")
+				}
+				m.manualInputFocus = 0
+				m.manualInputs[0].Focus()
+				for i := 1; i < len(m.manualInputs); i++ {
+					m.manualInputs[i].Blur()
+				}
+				return m, nil
+			case "tab", "down":
+				// Move to next input
+				m.manualInputs[m.manualInputFocus].Blur()
+				m.manualInputFocus = (m.manualInputFocus + 1) % len(m.manualInputs)
+				m.manualInputs[m.manualInputFocus].Focus()
+				return m, nil
+			case "shift+tab", "up":
+				// Move to previous input
+				m.manualInputs[m.manualInputFocus].Blur()
+				m.manualInputFocus = (m.manualInputFocus - 1 + len(m.manualInputs)) % len(m.manualInputs)
+				m.manualInputs[m.manualInputFocus].Focus()
+				return m, nil
+			case "enter":
+				// Add the manual command
+				cmd := m.manualInputs[0].Value()
+				workingDir := m.manualInputs[1].Value()
+				desc := m.manualInputs[2].Value()
+
+				if cmd == "" {
+					m.err = fmt.Errorf("command cannot be empty")
+					m.state = HKStateComplete
+					return m, nil
+				}
+				if workingDir == "" {
+					workingDir = "."
+				}
+				if desc == "" {
+					desc = cmd
+				}
+
+				// Add to suggestions
+				m.suggestions = append(m.suggestions, SuggestionItem{
+					Command: housekeeping.Command{
+						Command:     cmd,
+						WorkingDir:  workingDir,
+						Description: desc,
+					},
+					Selected: true,
+				})
+
+				// Reset inputs and go back
+				for i := range m.manualInputs {
+					m.manualInputs[i].SetValue("")
+				}
+				m.manualInputFocus = 0
+				m.manualInputs[0].Focus()
+				for i := 1; i < len(m.manualInputs); i++ {
+					m.manualInputs[i].Blur()
+				}
+				m.state = HKStateCommandSelect
+				return m, nil
+			default:
+				// Update the focused input
+				var cmd tea.Cmd
+				m.manualInputs[m.manualInputFocus], cmd = m.manualInputs[m.manualInputFocus].Update(msg)
+				return m, cmd
+			}
+		}
+
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
@@ -321,7 +448,11 @@ func (m HousekeepingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Up):
-			if m.state == HKStateCategorySelect {
+			if m.state == HKStatePackageSelect {
+				if m.packageCursor > 0 {
+					m.packageCursor--
+				}
+			} else if m.state == HKStateCategorySelect {
 				if m.categoryCursor > 0 {
 					m.categoryCursor--
 				}
@@ -332,7 +463,11 @@ func (m HousekeepingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.Down):
-			if m.state == HKStateCategorySelect {
+			if m.state == HKStatePackageSelect {
+				if m.packageCursor < len(m.packages)-1 {
+					m.packageCursor++
+				}
+			} else if m.state == HKStateCategorySelect {
 				if m.categoryCursor < len(m.categories)-1 {
 					m.categoryCursor++
 				}
@@ -343,14 +478,44 @@ func (m HousekeepingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.Select):
-			if m.state == HKStateCategorySelect {
+			if m.state == HKStatePackageSelect {
+				m.packages[m.packageCursor].Selected = !m.packages[m.packageCursor].Selected
+			} else if m.state == HKStateCategorySelect {
 				m.categories[m.categoryCursor].Selected = !m.categories[m.categoryCursor].Selected
 			} else if m.state == HKStateCommandSelect {
 				m.suggestions[m.cursor].Selected = !m.suggestions[m.cursor].Selected
 			}
 
+		case msg.String() == "i":
+			// Manual input mode - only in command select state
+			if m.state == HKStateCommandSelect {
+				m.state = HKStateManualInput
+				m.manualInputFocus = 0
+				m.manualInputs[0].Focus()
+				return m, nil
+			}
+
 		case key.Matches(msg, m.keys.Enter):
 			switch m.state {
+			case HKStatePackageSelect:
+				// Check if any packages are selected
+				hasSelected := false
+				for _, pkg := range m.packages {
+					if pkg.Selected {
+						hasSelected = true
+						break
+					}
+				}
+
+				if !hasSelected {
+					m.err = fmt.Errorf("no packages selected")
+					m.state = HKStateComplete
+					return m, nil
+				}
+
+				m.state = HKStateCategorySelect
+				return m, nil
+
 			case HKStateCategorySelect:
 				// Check if any categories are selected
 				hasSelected := false
@@ -421,17 +586,54 @@ func (m HousekeepingModel) View() string {
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", box)
 
-	case HKStateCategorySelect:
+	case HKStatePackageSelect:
 		title := TitleStyle.Render(IconCheck + " DETECTED PACKAGES")
 
-		// Show detected packages in a box
-		var detectedList []string
-		for _, pkg := range m.detected {
-			detectedList = append(detectedList, SubtleTextStyle.Render("  "+IconBullet)+" "+TextStyle.Render(pkg.Type.Description))
+		packageTitle := HeaderStyle.Margin(0, 0, ComponentGap, 0).Render("Select which package managers to use:")
+
+		// Show package selection
+		var options []string
+		for i, pkgItem := range m.packages {
+			cursor := "  "
+			if m.packageCursor == i {
+				cursor = IconCursor + " "
+			}
+
+			checkbox := IconCheckbox
+			if pkgItem.Selected {
+				checkbox = IconChecked
+			}
+
+			line := cursor + checkbox + " " + pkgItem.Package.Type.Description
+			if m.packageCursor == i {
+				line = SelectedItemStyle.Render(line)
+			} else {
+				line = ItemStyle.Render(line)
+			}
+			options = append(options, line)
+		}
+
+		packagesBox := BoxStyle.Width(60).Render(
+			lipgloss.JoinVertical(lipgloss.Left, options...),
+		)
+
+		instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
+
+		content = lipgloss.JoinVertical(lipgloss.Left, title, "", packageTitle, packagesBox, instructions)
+
+	case HKStateCategorySelect:
+		title := TitleStyle.Render(IconCheck + " SELECTED PACKAGES")
+
+		// Show selected packages in a box
+		var selectedList []string
+		for _, pkgItem := range m.packages {
+			if pkgItem.Selected {
+				selectedList = append(selectedList, SubtleTextStyle.Render("  "+IconBullet)+" "+TextStyle.Render(pkgItem.Package.Type.Description))
+			}
 		}
 
 		packagesBox := DimBoxStyle.Width(60).Render(
-			lipgloss.JoinVertical(lipgloss.Left, detectedList...),
+			lipgloss.JoinVertical(lipgloss.Left, selectedList...),
 		)
 
 		// Show category selection
@@ -504,9 +706,41 @@ func (m HousekeepingModel) View() string {
 			lipgloss.JoinVertical(lipgloss.Left, options...),
 		)
 
-		instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
+		instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • i add manual • enter continue")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", commandsBox, instructions)
+
+	case HKStateManualInput:
+		currentCategoryName := m.categories[m.currentCategory].Name
+		title := TitleStyle.Render(fmt.Sprintf(IconSettings+" ADD MANUAL COMMAND (%s)", strings.ToUpper(currentCategoryName)))
+
+		formTitle := HeaderStyle.Margin(0, 0, ComponentGap, 0).Render("Enter command details:")
+
+		// Build the form
+		var formFields []string
+
+		labels := []string{"Command:", "Working Directory:", "Description:"}
+		for i, input := range m.manualInputs {
+			label := labels[i]
+			if i == m.manualInputFocus {
+				label = SelectedItemStyle.Render(label)
+			} else {
+				label = TextStyle.Render(label)
+			}
+			formFields = append(formFields, label)
+			formFields = append(formFields, "  "+input.View())
+			if i < len(m.manualInputs)-1 {
+				formFields = append(formFields, "")
+			}
+		}
+
+		formBox := BoxStyle.Width(70).Render(
+			lipgloss.JoinVertical(lipgloss.Left, formFields...),
+		)
+
+		instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("tab/↑/↓ navigate fields • enter submit • esc cancel")
+
+		content = lipgloss.JoinVertical(lipgloss.Left, title, "", formTitle, formBox, instructions)
 
 	case HKStateConfirm:
 		title := TitleStyle.Render(IconCheck + " CONFIRM SELECTION")

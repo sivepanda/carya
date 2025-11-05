@@ -23,6 +23,9 @@
   {
     "name": "yarn",
     "detectFile": "yarn.lock",
+    "excludes": [
+      "npm"
+    ],
     "description": "Node.js (Yarn)",
     "commands": {
       "post-pull": [
@@ -44,6 +47,9 @@
   {
     "name": "pnpm",
     "detectFile": "pnpm-lock.yaml",
+    "excludes": [
+      "npm"
+    ],
     "description": "Node.js (pnpm)",
     "commands": {
       "post-pull": [
@@ -58,6 +64,30 @@
           "command": "pnpm install",
           "workingDir": ".",
           "description": "Install pnpm dependencies"
+        }
+      ]
+    }
+  },
+  {
+    "name": "bun",
+    "detectFile": "bun.lock",
+    "excludes": [
+      "npm"
+    ],
+    "description": "Node.js (Bun)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "bun install",
+          "workingDir": ".",
+          "description": "Install Bun dependencies"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "bun install",
+          "workingDir": ".",
+          "description": "Install Bun dependencies"
         }
       ]
     }
@@ -299,32 +329,146 @@
     }
   },
   {
-    "name": "prisma",
-    "detectFile": "prisma/schema.prisma",
-    "description": "Prisma ORM",
+    "name": "prisma-pnpm",
+    "detectFiles": [
+      "prisma/schema.prisma",
+      "pnpm-lock.yaml"
+    ],
+    "excludes": [
+      "prisma-npm"
+    ],
+    "description": "Prisma ORM (pnpm)",
     "commands": {
       "post-pull": [
         {
-          "command": "prisma generate",
+          "command": "pnpm prisma generate",
           "workingDir": ".",
-          "description": "Generate Prisma Client"
+          "description": "Generate Prisma Client (pnpm)"
         },
         {
-          "command": "prisma migrate deploy",
+          "command": "pnpm prisma migrate deploy",
           "workingDir": ".",
-          "description": "Apply Prisma migrations"
+          "description": "Apply Prisma migrations (pnpm)"
         }
       ],
       "post-checkout": [
         {
-          "command": "prisma generate",
+          "command": "pnpm prisma generate",
           "workingDir": ".",
-          "description": "Generate Prisma Client"
+          "description": "Generate Prisma Client (pnpm)"
         },
         {
-          "command": "prisma migrate deploy",
+          "command": "pnpm prisma migrate deploy",
           "workingDir": ".",
-          "description": "Apply Prisma migrations"
+          "description": "Apply Prisma migrations (pnpm)"
+        }
+      ]
+    }
+  },
+  {
+    "name": "prisma-yarn",
+    "detectFiles": [
+      "prisma/schema.prisma",
+      "yarn.lock"
+    ],
+    "excludes": [
+      "prisma-npm"
+    ],
+    "description": "Prisma ORM (Yarn)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "yarn prisma generate",
+          "workingDir": ".",
+          "description": "Generate Prisma Client (Yarn)"
+        },
+        {
+          "command": "yarn prisma migrate deploy",
+          "workingDir": ".",
+          "description": "Apply Prisma migrations (Yarn)"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "yarn prisma generate",
+          "workingDir": ".",
+          "description": "Generate Prisma Client (Yarn)"
+        },
+        {
+          "command": "yarn prisma migrate deploy",
+          "workingDir": ".",
+          "description": "Apply Prisma migrations (Yarn)"
+        }
+      ]
+    }
+  },
+  {
+    "name": "prisma-bun",
+    "detectFiles": [
+      "prisma/schema.prisma",
+      "bun.lock"
+    ],
+    "excludes": [
+      "prisma-npm"
+    ],
+    "description": "Prisma ORM (Bun)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "bunx prisma generate",
+          "workingDir": ".",
+          "description": "Generate Prisma Client (Bun)"
+        },
+        {
+          "command": "bunx prisma migrate deploy",
+          "workingDir": ".",
+          "description": "Apply Prisma migrations (Bun)"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "bunx prisma generate",
+          "workingDir": ".",
+          "description": "Generate Prisma Client (Bun)"
+        },
+        {
+          "command": "bunx prisma migrate deploy",
+          "workingDir": ".",
+          "description": "Apply Prisma migrations (Bun)"
+        }
+      ]
+    }
+  },
+  {
+    "name": "prisma-npm",
+    "detectFiles": [
+      "prisma/schema.prisma",
+      "package-lock.json"
+    ],
+    "description": "Prisma ORM (npm)",
+    "commands": {
+      "post-pull": [
+        {
+          "command": "npx prisma generate",
+          "workingDir": ".",
+          "description": "Generate Prisma Client (npm)"
+        },
+        {
+          "command": "npx prisma migrate deploy",
+          "workingDir": ".",
+          "description": "Apply Prisma migrations (npm)"
+        }
+      ],
+      "post-checkout": [
+        {
+          "command": "npx prisma generate",
+          "workingDir": ".",
+          "description": "Generate Prisma Client (npm)"
+        },
+        {
+          "command": "npx prisma migrate deploy",
+          "workingDir": ".",
+          "description": "Apply Prisma migrations (npm)"
         }
       ]
     }
