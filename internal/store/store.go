@@ -6,7 +6,7 @@ import (
 	"carya/internal/chunk"
 	"database/sql"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // SQLiteStore provides SQLite-based persistent storage for chunks.
