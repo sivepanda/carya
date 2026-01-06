@@ -17,7 +17,7 @@ type SQLiteStore struct {
 // NewSQLiteStore creates a new SQLite store with the specified database file path.
 // It automatically initializes the required tables and indexes.
 func NewSQLiteStore(dataSourceName string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite3", dataSourceName)
+	db, err := sql.Open("sqlite", dataSourceName)
 	if err != nil {
 		return nil, err
 	}

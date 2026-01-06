@@ -303,6 +303,26 @@ func (m *DiffViewerModel) updateDiffContent() {
 
 // formatDiff applies syntax highlighting to diff content
 func (m *DiffViewerModel) formatDiff(diff string) string {
+	// Check if this is a binary file message
+	if strings.HasPrefix(diff, "Binary file ") {
+		binaryStyle := lipgloss.NewStyle().
+			Foreground(ColorWarning).
+			Bold(true)
+		infoStyle := lipgloss.NewStyle().
+			Foreground(ColorTertiary)
+		
+		lines := strings.Split(diff, "\n")
+		var formatted []string
+		for i, line := range lines {
+			if i == 0 {
+				formatted = append(formatted, binaryStyle.Render("⚠ "+line))
+			} else if strings.TrimSpace(line) != "" {
+				formatted = append(formatted, infoStyle.Render("  "+line))
+			}
+		}
+		return strings.Join(formatted, "\n")
+	}
+
 	lines := strings.Split(diff, "\n")
 	var formatted []string
 

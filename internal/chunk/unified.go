@@ -1,6 +1,7 @@
 package chunk
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"log"
@@ -145,6 +146,14 @@ func (s *UnifiedStrategy) hashContent(content []byte) string {
 func (s *UnifiedStrategy) generateDiff(active *activeChunk) string {
 	chunk := active.chunk
 
+	// Check if content is binary
+	if isBinary(active.initialContent) || isBinary(active.latestContent) {
+		return fmt.Sprintf("Binary file %s has changed\n(Initial hash: %s, Latest hash: %s)",
+			chunk.FilePath,
+			active.initialHash[:8],
+			string(chunk.Hash)[:8])
+	}
+
 	// Create header
 	header := fmt.Sprintf("diff --git a/%s b/%s\nindex %s..%s\n--- a/%s\n+++ b/%s\n",
 		chunk.FilePath,
@@ -161,6 +170,39 @@ func (s *UnifiedStrategy) generateDiff(active *activeChunk) string {
 	diff := computeSimpleDiff(oldLines, newLines)
 
 	return header + diff
+}
+
+// isBinary checks if the content appears to be binary data.
+// It checks for null bytes and high proportion of non-printable characters.
+func isBinary(content []byte) bool {
+	// Empty content is not binary
+	if len(content) == 0 {
+		return false
+	}
+
+	// Check for null bytes (strong indicator of binary data)
+	if bytes.IndexByte(content, 0) != -1 {
+		return true
+	}
+
+	// Check up to first 8KB for performance
+	sampleSize := len(content)
+	if sampleSize > 8192 {
+		sampleSize = 8192
+	}
+
+	// Count non-printable characters
+	nonPrintable := 0
+	for i := 0; i < sampleSize; i++ {
+		b := content[i]
+		// Consider bytes outside printable ASCII range (excluding common whitespace)
+		if b < 9 || (b > 13 && b < 32) || b > 126 {
+			nonPrintable++
+		}
+	}
+
+	// If more than 30% non-printable, consider it binary
+	return float64(nonPrintable)/float64(sampleSize) > 0.3
 }
 
 // splitLines splits text into lines, preserving empty lines
