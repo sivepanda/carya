@@ -2,8 +2,11 @@ package tui
 
 import (
 	"carya/internal/chunk"
+	"carya/internal/repository"
 	"carya/internal/store"
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -49,7 +52,18 @@ func NewDiffViewerModel(store ChunkStore) (*DiffViewerModel, error) {
 	// Load recent chunks
 	chunks, err := store.GetRecentChunks(100)
 	if err != nil {
+		log.Printf("Failed to load chunks: %v", err)
 		return nil, fmt.Errorf("failed to load chunks: %w", err)
+	}
+
+	// Log information about loaded chunks
+	log.Printf("Loaded %d chunks", len(chunks))
+	for i, c := range chunks {
+		log.Printf("Chunk %d: ID=%s, FilePath=%s, DiffLength=%d", 
+			i, c.ID, c.FilePath, len(c.Diff))
+		if len(c.Diff) == 0 {
+			log.Printf("WARNING: Chunk %d has empty diff content", i)
+		}
 	}
 
 	m := &DiffViewerModel{
@@ -296,7 +310,27 @@ func (m *DiffViewerModel) updateDiffContent() {
 	}
 
 	c := m.chunks[m.cursor]
+	
+	// Debug logging to check if diff content exists
+	diffLength := len(c.Diff)
+	if diffLength == 0 {
+		log.Printf("WARNING: Empty diff content for chunk %s", c.ID)
+		m.diffViewport.SetContent(lipgloss.NewStyle().
+			Foreground(ColorError).
+			Bold(true).
+			Render("WARNING: Diff content is empty"))
+		return
+	}
+	
+	// Log the raw diff content for debugging
+	log.Printf("Displaying diff for chunk %s (file: %s, length: %d)", 
+		c.ID, c.FilePath, diffLength)
+	log.Printf("Raw diff content:\n%s", c.Diff)
+	
+	// Format the diff content with syntax highlighting
 	diffContent := m.formatDiff(c.Diff)
+	
+	// Set the content in the viewport
 	m.diffViewport.SetContent(diffContent)
 	m.diffViewport.GotoTop()
 }
@@ -323,13 +357,20 @@ func (m *DiffViewerModel) formatDiff(diff string) string {
 		return strings.Join(formatted, "\n")
 	}
 
+	// If the diff is empty, show a message
+	if strings.TrimSpace(diff) == "" {
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#888888")).
+			Render("No changes detected")
+	}
+
 	lines := strings.Split(diff, "\n")
 	var formatted []string
 
-	// Style definitions for diff lines - using our new color palette
+	// Style definitions for diff lines - using our color palette
 	addedStyle := lipgloss.NewStyle().Foreground(ColorSuccess).Bold(false)
 	removedStyle := lipgloss.NewStyle().Foreground(ColorError).Bold(false)
-	contextStyle := lipgloss.NewStyle().Foreground(ColorTertiary)
+	contextStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#cccccc")) // Make context lines more visible
 	headerStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
 	rangeStyle := lipgloss.NewStyle().Foreground(ColorWarning).Bold(true)
 
@@ -349,7 +390,8 @@ func (m *DiffViewerModel) formatDiff(diff string) string {
 		case strings.HasPrefix(line, "File:") || strings.HasPrefix(line, "Time:") || strings.HasPrefix(line, "Hash:"):
 			formatted = append(formatted, contextStyle.Render(line))
 		default:
-			formatted = append(formatted, TextStyle.Render(line))
+			// Make context lines more visible with explicit color
+			formatted = append(formatted, contextStyle.Render(line))
 		}
 	}
 
@@ -358,21 +400,47 @@ func (m *DiffViewerModel) formatDiff(diff string) string {
 
 // RunDiffViewer runs the diff viewer TUI
 func RunDiffViewer(dataSourceName string) error {
+	// Setup logging to the repo log file
+	repo, err := repository.New()
+	if err != nil {
+		return fmt.Errorf("failed to initialize repository: %w", err)
+	}
+
+	// Open log file for appending
+	logFile, err := os.OpenFile(repo.LogPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open log file: %w", err)
+	}
+	defer logFile.Close()
+
+	// Configure logger
+	log.SetOutput(logFile)
+	log.SetPrefix("DiffViewer: ")
+	log.SetFlags(log.Ldate | log.Ltime)
+	log.Println("Starting diff viewer")
+
+	// Initialize store
 	store, err := store.NewSQLiteStore(dataSourceName)
 	if err != nil {
+		log.Printf("Error opening store: %v", err)
 		return fmt.Errorf("failed to open store: %w", err)
 	}
 	defer store.Close()
 
+	// Create model
 	model, err := NewDiffViewerModel(store)
 	if err != nil {
+		log.Printf("Error creating model: %v", err)
 		return err
 	}
 
+	// Run the program
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
+		log.Printf("Error running program: %v", err)
 		return fmt.Errorf("error running diff viewer: %w", err)
 	}
 
+	log.Println("Diff viewer closed")
 	return nil
 }
