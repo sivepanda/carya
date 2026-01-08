@@ -27,8 +27,9 @@ Defines and handles actions taken after a pull or switching branches -- things s
 # TODO
 
 1. Improve housekeeping engine - presently all configs need to be registered, make it smarter
-2. Make things look nicer. Implement LipGloss, BubbleTea.
-
+2. fix patching, review git patch formatting, make sure everything works
+3. dependencies
+4. corrupted lines?
 
 
 

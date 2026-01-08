@@ -1,3 +1,0 @@
-- fix patching, review git patch formatting, make sure everything works
-- dependencies
-- corrupted lines?
