@@ -34,5 +34,6 @@ go.work.sum
 .carya/
 .crush/
 ./.crush.json
+CRUSH.md
 
 /carya

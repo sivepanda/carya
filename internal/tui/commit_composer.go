@@ -26,34 +26,34 @@ const (
 	StatusEditing
 	StatusConfirming
 	StatusCommitting
-	StatusWarning    // New state for showing warnings
+	StatusWarning // New state for showing warnings
 	StatusDone
 	StatusError
 )
 
 // CommitComposerModel represents the Bubble Tea model for selecting and committing diffs
 type CommitComposerModel struct {
-	help           help.Model
-	keys           KeyMap
-	chunks         []chunk.Chunk
-	selectedChunks map[int]bool
-	cursor         int
-	listViewport   viewport.Model
-	diffViewport   viewport.Model
-	store          ChunkStore
-	width          int
-	height         int
-	ready          bool
-	err            error
-	listWidth      int
-	diffWidth      int
-	commitMsg      textinput.Model
-	status         CommitStatus
-	result         string
-	spinner        spinner.Model
-	pendingWarnings []string // Store warnings for the warning view
-	pendingPatch    string   // Store patch for applying after confirmation
-	pendingCommitMsg string  // Store commit message for applying after confirmation
+	help             help.Model
+	keys             KeyMap
+	chunks           []chunk.Chunk
+	selectedChunks   map[int]bool
+	cursor           int
+	listViewport     viewport.Model
+	diffViewport     viewport.Model
+	store            ChunkStore
+	width            int
+	height           int
+	ready            bool
+	err              error
+	listWidth        int
+	diffWidth        int
+	commitMsg        textinput.Model
+	status           CommitStatus
+	result           string
+	spinner          spinner.Model
+	pendingWarnings  []string // Store warnings for the warning view
+	pendingPatch     string   // Store patch for applying after confirmation
+	pendingCommitMsg string   // Store commit message for applying after confirmation
 }
 
 // NewCommitComposerModel creates a new commit composer model
@@ -64,7 +64,7 @@ func NewCommitComposerModel(store ChunkStore) (*CommitComposerModel, error) {
 	h.Styles.ShortKey = HelpKeyStyle
 	h.Styles.FullDesc = HelpDescStyle
 	h.Styles.FullKey = HelpKeyStyle
-	
+
 	// Initialize spinner
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -159,7 +159,6 @@ func (m *CommitComposerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateSelecting handles the chunk selection state
 func (m *CommitComposerModel) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
-
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -288,26 +287,28 @@ func (m *CommitComposerModel) updateConfirming(msg tea.Msg) (tea.Model, tea.Cmd)
 // createCommit performs the git operations to create a commit from selected diffs
 func (m *CommitComposerModel) createCommit() tea.Msg {
 	log.Println("Creating commit from selected diffs")
-	
+
 	// First, create a patch from the selected diffs
 	log.Println("Creating patch from selected diffs")
 	patch, cleanupWarnings := m.createPatchFromSelectedDiffs()
-	
+
+	log.Printf(patch)
+
 	// Check if we have a valid patch
 	if len(patch) == 0 {
 		log.Println("No valid patches to apply")
 		return errMsg{fmt.Errorf("no valid patches to apply")}
 	}
-	
+
 	log.Printf("Created patch with %d bytes", len(patch))
-	
+
 	// Log any cleanup warnings
 	if len(cleanupWarnings) > 0 {
 		log.Println("Warning: Potential corrupt content was detected and cleaned:")
 		for _, warning := range cleanupWarnings {
 			log.Println(warning)
 		}
-		
+
 		// If we're in confirm mode and there were warnings, return with the warning
 		if len(cleanupWarnings) > 0 {
 			log.Println("Returning corruption warning to user")
@@ -318,18 +319,18 @@ func (m *CommitComposerModel) createCommit() tea.Msg {
 			}
 		}
 	}
-	
+
 	// Apply the patch
 	log.Println("Applying patch to git index")
 	applyCmd := exec.Command("git", "apply", "--index", "-")
 	applyCmd.Stdin = strings.NewReader(patch)
-	
+
 	if output, err := applyCmd.CombinedOutput(); err != nil {
 		log.Printf("Error applying patch: %v\n%s", err, output)
 		return errMsg{fmt.Errorf("failed to apply patch: %w\n%s", err, output)}
 	}
 	log.Println("Patch applied successfully")
-	
+
 	// Create the commit
 	log.Printf("Creating git commit with message: %s", m.commitMsg.Value())
 	commitCmd := exec.Command("git", "commit", "-m", m.commitMsg.Value())
@@ -376,18 +377,18 @@ func (m *CommitComposerModel) createPatchFromSelectedDiffs() (string, []string) 
 func (m *CommitComposerModel) cleanupDiffForGit(c chunk.Chunk) (string, []string) {
 	diff := c.Diff
 	var warnings []string
-	
+
 	// Skip binary files
 	if strings.HasPrefix(diff, "Binary file ") {
 		log.Printf("Skipping binary file: %s", c.FilePath)
 		return "", nil
 	}
-	
+
 	// Ensure the diff ends with a newline for proper git apply
 	if !strings.HasSuffix(diff, "\n") {
 		diff = diff + "\n"
 	}
-	
+
 	// Check for null bytes which would corrupt the patch
 	if strings.Contains(diff, "\x00") {
 		warning := "Diff contains null bytes (file may be binary)"
@@ -395,10 +396,10 @@ func (m *CommitComposerModel) cleanupDiffForGit(c chunk.Chunk) (string, []string
 		warnings = append(warnings, warning)
 		return "", warnings
 	}
-	
+
 	// Normalize line endings
 	diff = strings.ReplaceAll(diff, "\r\n", "\n")
-	
+
 	return diff, warnings
 }
 
@@ -442,8 +443,8 @@ func (m *CommitComposerModel) View() string {
 		title := TitleStyle.Render("📋 LOADING CHUNKS")
 		spinnerView := m.spinner.View()
 		loadingText := TextStyle.Render(" Loading chunks...")
-		
-		loadingContent := lipgloss.JoinVertical(lipgloss.Center, 
+
+		loadingContent := lipgloss.JoinVertical(lipgloss.Center,
 			title,
 			"",
 			lipgloss.JoinHorizontal(lipgloss.Center, spinnerView, loadingText),
@@ -507,12 +508,12 @@ func (m *CommitComposerModel) renderSelectionView() string {
 	selectHelp := HelpKeyStyle.Render("space") + HelpDescStyle.Render(" select")
 	continueHelp := HelpKeyStyle.Render("enter") + HelpDescStyle.Render(" continue")
 	quitHelp := HelpKeyStyle.Render("q") + HelpDescStyle.Render(" quit")
-	
+
 	selectedInfo := ""
 	if selectedCount > 0 {
 		selectedInfo = SuccessStyle.Render(fmt.Sprintf(" • %d selected", selectedCount))
 	}
-	
+
 	footer := lipgloss.NewStyle().
 		Padding(0, 1).
 		Render(navHelp + " • " + selectHelp + " • " + continueHelp + " • " + quitHelp + selectedInfo)
@@ -626,7 +627,7 @@ func (m *CommitComposerModel) formatDiff(diff string) string {
 			Bold(true)
 		infoStyle := lipgloss.NewStyle().
 			Foreground(ColorTertiary)
-		
+
 		lines := strings.Split(diff, "\n")
 		var formatted []string
 		for i, line := range lines {
@@ -675,7 +676,7 @@ func (m *CommitComposerModel) formatDiff(diff string) string {
 // renderEditingView shows the commit message editing interface
 func (m *CommitComposerModel) renderEditingView() string {
 	title := TitleStyle.Render("✏️  COMMIT MESSAGE")
-	
+
 	// Count selected chunks
 	selectedCount := 0
 	for _, selected := range m.selectedChunks {
@@ -683,7 +684,7 @@ func (m *CommitComposerModel) renderEditingView() string {
 			selectedCount++
 		}
 	}
-	
+
 	// List selected files
 	var selectedFiles []string
 	for i, chunk := range m.chunks {
@@ -695,31 +696,31 @@ func (m *CommitComposerModel) renderEditingView() string {
 			}
 		}
 	}
-	
+
 	filesHeader := SubheaderStyle.Render(fmt.Sprintf("SELECTED FILES (%d):", selectedCount))
 	filesContent := SubtleTextStyle.Render(strings.Join(selectedFiles, "\n"))
-	
+
 	// Input field
 	inputHeader := SubheaderStyle.Render("COMMIT MESSAGE:")
-	
+
 	// Style the input
 	inputStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorder).
 		Padding(1, 2).
 		Width(60)
-	
+
 	inputBox := inputStyle.Render(m.commitMsg.View())
-	
+
 	// Instructions
 	escHelp := HelpKeyStyle.Render("esc") + HelpDescStyle.Render(" back")
 	enterHelp := HelpKeyStyle.Render("enter") + HelpDescStyle.Render(" continue")
 	quitHelp := HelpKeyStyle.Render("q") + HelpDescStyle.Render(" quit")
-	
+
 	footer := lipgloss.NewStyle().
 		Padding(1, 1).
 		Render(escHelp + " • " + enterHelp + " • " + quitHelp)
-	
+
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
@@ -727,12 +728,12 @@ func (m *CommitComposerModel) renderEditingView() string {
 		filesHeader,
 		filesContent,
 		"",
-		inputHeader, 
+		inputHeader,
 		inputBox,
 		"",
 		footer,
 	)
-	
+
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
@@ -761,17 +762,17 @@ func (m *CommitComposerModel) updateWarning(msg tea.Msg) (tea.Model, tea.Cmd) {
 // applyPendingPatch applies the previously generated patch after warning confirmation
 func (m *CommitComposerModel) applyPendingPatch() tea.Msg {
 	log.Println("Applying patch after warning confirmation")
-	
+
 	// Apply the patch
-	applyCmd := exec.Command("git", "apply", "--index", "-")
+	applyCmd := exec.Command("git", "apply", "--cached", "-")
 	applyCmd.Stdin = strings.NewReader(m.pendingPatch)
-	
+
 	if output, err := applyCmd.CombinedOutput(); err != nil {
 		log.Printf("Error applying patch: %v\n%s", err, output)
 		return errMsg{fmt.Errorf("failed to apply patch: %w\n%s", err, output)}
 	}
 	log.Println("Patch applied successfully")
-	
+
 	// Create the commit
 	log.Printf("Creating git commit with message: %s", m.pendingCommitMsg)
 	commitCmd := exec.Command("git", "commit", "-m", m.pendingCommitMsg)
@@ -789,7 +790,7 @@ func (m *CommitComposerModel) applyPendingPatch() tea.Msg {
 // renderConfirmationView shows the confirmation dialog
 func (m *CommitComposerModel) renderConfirmationView() string {
 	title := TitleStyle.Render("❓ CONFIRM COMMIT")
-	
+
 	// Count selected chunks
 	selectedCount := 0
 	for _, selected := range m.selectedChunks {
@@ -797,19 +798,19 @@ func (m *CommitComposerModel) renderConfirmationView() string {
 			selectedCount++
 		}
 	}
-	
+
 	message := fmt.Sprintf("Commit %d changes with message:", selectedCount)
-	
+
 	// Style the confirmation box
 	confirmStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorWarning).
 		Padding(1, 2).
 		Width(60)
-	
+
 	// Format the commit message
 	commitMsg := TextStyle.Bold(true).Render("\"" + m.commitMsg.Value() + "\"")
-	
+
 	confirmBox := confirmStyle.Render(
 		lipgloss.JoinVertical(
 			lipgloss.Center,
@@ -820,16 +821,16 @@ func (m *CommitComposerModel) renderConfirmationView() string {
 			TextStyle.Render("Are you sure? (y/n)"),
 		),
 	)
-	
+
 	// Instructions
 	yesHelp := HelpKeyStyle.Render("y") + HelpDescStyle.Render(" yes")
 	noHelp := HelpKeyStyle.Render("n") + HelpDescStyle.Render(" no")
 	quitHelp := HelpKeyStyle.Render("q") + HelpDescStyle.Render(" quit")
-	
+
 	footer := lipgloss.NewStyle().
 		Padding(1, 1).
 		Render(yesHelp + " • " + noHelp + " • " + quitHelp)
-	
+
 	content := lipgloss.JoinVertical(
 		lipgloss.Center,
 		title,
@@ -838,14 +839,14 @@ func (m *CommitComposerModel) renderConfirmationView() string {
 		"",
 		footer,
 	)
-	
+
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
 // renderWarningView shows the warning confirmation dialog
 func (m *CommitComposerModel) renderWarningView() string {
 	title := WarningStyle.Render("⚠ CORRUPT CONTENT DETECTED")
-	
+
 	// Format the warnings for display
 	var warningLines []string
 	for i, warning := range m.pendingWarnings {
@@ -856,19 +857,19 @@ func (m *CommitComposerModel) renderWarningView() string {
 			break
 		}
 	}
-	
+
 	warningText := SubtleTextStyle.Render(strings.Join(warningLines, "\n"))
-	
+
 	message := TextStyle.Render("Corrupt or invalid content was detected and cleaned from the diff.")
 	question := TextStyle.Bold(true).Render("Proceed with the cleaned version?")
-	
+
 	// Style the warning box
 	warningStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorWarning).
 		Padding(1, 2).
 		Width(70)
-	
+
 	warningBox := warningStyle.Render(
 		lipgloss.JoinVertical(
 			lipgloss.Left,
@@ -881,16 +882,16 @@ func (m *CommitComposerModel) renderWarningView() string {
 			TextStyle.Render("Press (y) to proceed or (n) to cancel"),
 		),
 	)
-	
+
 	// Instructions
 	yesHelp := HelpKeyStyle.Render("y") + HelpDescStyle.Render(" proceed")
 	noHelp := HelpKeyStyle.Render("n") + HelpDescStyle.Render(" cancel")
 	quitHelp := HelpKeyStyle.Render("q") + HelpDescStyle.Render(" quit")
-	
+
 	footer := lipgloss.NewStyle().
 		Padding(1, 1).
 		Render(yesHelp + " • " + noHelp + " • " + quitHelp)
-	
+
 	content := lipgloss.JoinVertical(
 		lipgloss.Center,
 		title,
@@ -899,25 +900,25 @@ func (m *CommitComposerModel) renderWarningView() string {
 		"",
 		footer,
 	)
-	
+
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
 // renderCommittingView shows the commit in progress view
 func (m *CommitComposerModel) renderCommittingView() string {
 	title := TitleStyle.Render("⏳ CREATING COMMIT")
-	
+
 	spinnerView := m.spinner.View()
 	loadingText := TextStyle.Render(" Creating commit, please wait...")
-	
+
 	return lipgloss.Place(
-		m.width, 
-		m.height, 
-		lipgloss.Center, 
-		lipgloss.Center, 
-		lipgloss.JoinVertical(lipgloss.Center, 
-			title, 
-			"", 
+		m.width,
+		m.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		lipgloss.JoinVertical(lipgloss.Center,
+			title,
+			"",
 			lipgloss.JoinHorizontal(lipgloss.Center, spinnerView, loadingText),
 		),
 	)
@@ -926,17 +927,17 @@ func (m *CommitComposerModel) renderCommittingView() string {
 // renderDoneView shows the success view
 func (m *CommitComposerModel) renderDoneView() string {
 	title := SuccessStyle.Render("✓ COMMIT CREATED")
-	
+
 	resultStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorSuccess).
 		Padding(1, 2).
 		Width(60)
-	
+
 	resultBox := resultStyle.Render(m.result)
-	
+
 	footer := HelpDescStyle.Margin(1, 0, 0, 0).Render("Press Enter or q to quit")
-	
+
 	content := lipgloss.JoinVertical(lipgloss.Center, title, "", resultBox, "", footer)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
@@ -954,7 +955,7 @@ func (m *CommitComposerModel) renderErrorView() string {
 		Render(errorMsg)
 
 	footer := HelpDescStyle.Margin(1, 0, 0, 0).Render("Press Enter or q to quit")
-	
+
 	content := lipgloss.JoinVertical(lipgloss.Center, title, "", errorBox, "", footer)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
