@@ -4,16 +4,16 @@
 Feel free to make a pull request!
 
 ## Keys
-`name` The name of the package manager/library
-`detectFile` File that when detected, can be used to infer a potential package manager/library used
-`detectFiles` Files that only when detected *together*, can be used to infer a potential package manager/library used **CANNOT BE USED WITH detectFile**
-`description` Description of the command/library/pkgman
-`commands` contains post-pull and post-checkout commands. **Both post-pull and post-checkout use the same schema.**
-`post-pull` contains associated post-pull command
-`post-checkout` contains associated post-checkout command
-`command` bash command to run
-`workingDir` directory to run bash command
-`description` description of bash command
+`name` The name of the package manager/library  
+`detectFile` File that when detected, can be used to infer a potential package manager/library used  
+`detectFiles` Files that only when detected *together*, can be used to infer a potential package manager/library used **CANNOT BE USED WITH detectFile**  
+`description` Description of the command/library/pkgman  
+`commands` contains post-pull and post-checkout commands. **Both post-pull and post-checkout use the same schema.**  
+`post-pull` contains associated post-pull command  
+`post-checkout` contains associated post-checkout command  
+`command` bash command to run  
+`workingDir` directory to run bash command  
+`description` description of bash command  
 
 ## Examples
 Below is a simple example of an addition to autodetect:
@@ -40,7 +40,7 @@ Below is a simple example of an addition to autodetect:
 }
 ```
 
-Alternatively, if multiple files must be detected to infer, you can add multiple detectFiles:
+Alternatively, if multiple files must be detected to infer, you can add multiple `detectFiles`:
 ```json
     "name": "prisma-pnpm",
     "detectFiles": [
