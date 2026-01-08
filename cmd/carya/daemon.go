@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"carya/internal/daemon"
 	"carya/internal/features/engine"
@@ -15,10 +17,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type DaemonStatus struct {
+	FlushInterval string `json:"flush_interval"`
+	IsIdle        bool   `json:"is_idle"`
+	LastUpdate    string `json:"last_update"`
+}
+
 var daemonCmd = &cobra.Command{
 	Use:    "daemon",
 	Short:  "Run Carya watcher as a background daemon",
-	Hidden: true, // Hidden from normal help - used internally
+	Hidden: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		repo, err := repository.New()
 		if err != nil {
@@ -29,21 +37,17 @@ var daemonCmd = &cobra.Command{
 			log.Fatalf("Not a Carya repository. Run 'carya init' first.")
 		}
 
-		// Create daemon manager
 		d := daemon.New(
 			repo.PIDPath(),
 			repo.LogPath(),
 		)
 
-		// Write PID file
 		if err := d.WritePID(); err != nil {
 			log.Fatalf("Failed to write PID file: %v", err)
 		}
 
-		// Ensure PID file is removed on exit
 		defer d.RemovePID()
 
-		// Redirect logs to file
 		logFile, err := os.OpenFile(repo.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			log.Fatalf("Failed to open log file: %v", err)
@@ -53,25 +57,21 @@ var daemonCmd = &cobra.Command{
 
 		log.Println("Starting Carya daemon...")
 
-		// Initialize engine feature
 		engineFeature := engine.NewEngineFeature()
 		if err := engineFeature.Initialize(repo); err != nil {
 			log.Fatalf("Failed to initialize engine: %v", err)
 		}
 
-		// Initialize watcher feature with engine
 		watcherFeature := watcher.NewWatcherFeature()
 		if err := watcherFeature.InitializeWithEngine(repo, engineFeature.Engine()); err != nil {
 			log.Fatalf("Failed to initialize watcher: %v", err)
 		}
 
-		// Start engine
 		if err := engineFeature.Start(); err != nil {
 			log.Fatalf("Failed to start engine: %v", err)
 		}
 		defer engineFeature.Stop()
 
-		// Start watcher
 		if err := watcherFeature.Start(); err != nil {
 			log.Fatalf("Failed to start watcher: %v", err)
 		}
@@ -79,15 +79,41 @@ var daemonCmd = &cobra.Command{
 
 		log.Println("Carya daemon is now watching for file changes")
 
-		// Set up signal handling
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGUSR1)
 
-		// Wait for signals
+		go func() {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ticker.C:
+					interval, isIdle := engineFeature.Engine().FlushStatus()
+					status := DaemonStatus{
+						FlushInterval: interval.String(),
+						IsIdle:        isIdle,
+						LastUpdate:    time.Now().Format(time.RFC3339),
+					}
+
+					data, err := json.Marshal(status)
+					if err != nil {
+						log.Printf("Error marshaling status: %v", err)
+						continue
+					}
+
+					if err := os.WriteFile(repo.StatusPath(), data, 0644); err != nil {
+						log.Printf("Error writing status file: %v", err)
+					}
+				case <-sigCh:
+					return
+				}
+			}
+		}()
+
 		for sig := range sigCh {
 			switch sig {
 			case syscall.SIGUSR1:
-				// Manual flush requested
 				log.Println("Received flush signal, flushing all chunks...")
 				if err := engineFeature.Engine().FlushAll(); err != nil {
 					log.Printf("Error flushing chunks: %v", err)
@@ -95,7 +121,6 @@ var daemonCmd = &cobra.Command{
 					log.Println("All chunks flushed successfully")
 				}
 			case os.Interrupt, syscall.SIGTERM:
-				// Shutdown requested
 				log.Println("Shutting down Carya daemon...")
 				return
 			}
@@ -125,7 +150,6 @@ var startCmd = &cobra.Command{
 			os.Exit(0)
 		}
 
-		// Start daemon in background
 		if err := d.Start([]string{"daemon"}); err != nil {
 			fmt.Fprintf(os.Stderr, "Error starting daemon: %v\n", err)
 			os.Exit(1)
@@ -178,6 +202,18 @@ var statusCmd = &cobra.Command{
 			pid, _ := d.ReadPID()
 			fmt.Printf("✓ Carya daemon is running (PID: %d)\n", pid)
 			fmt.Printf("  Log file: %s\n", d.GetLogPath())
+
+			statusData, err := os.ReadFile(repo.StatusPath())
+			if err == nil {
+				var status DaemonStatus
+				if err := json.Unmarshal(statusData, &status); err == nil {
+					mode := "active"
+					if status.IsIdle {
+						mode = "idle"
+					}
+					fmt.Printf("  Flush interval: %s (%s mode)\n", status.FlushInterval, mode)
+				}
+			}
 		} else {
 			fmt.Println("Carya daemon is not running")
 		}

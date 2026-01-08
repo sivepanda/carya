@@ -105,7 +105,7 @@ func NewCommitComposerModel(store ChunkStore) (*CommitComposerModel, error) {
 
 // Init initializes the model
 func (m *CommitComposerModel) Init() tea.Cmd {
-	return spinner.Tick
+	return m.spinner.Tick
 }
 
 // Update handles messages and updates the model
@@ -225,9 +225,9 @@ func (m *CommitComposerModel) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) 
 
 		// Allow scrolling the diff with Ctrl+d and Ctrl+u
 		case msg.String() == "ctrl+d":
-			m.diffViewport.ViewDown()
+			m.diffViewport.PageDown()
 		case msg.String() == "ctrl+u":
-			m.diffViewport.ViewUp()
+			m.diffViewport.PageUp()
 		}
 	}
 
@@ -366,7 +366,10 @@ func (m *CommitComposerModel) createPatchFromSelectedDiffs() (string, []string) 
 		}
 	}
 
-	return strings.Join(patches, "\n"), warnings
+	if len(patches) == 0 {
+		return "", warnings
+	}
+	return strings.Join(patches, ""), warnings
 }
 
 // cleanupDiffForGit prepares a diff for use with git apply
@@ -380,41 +383,23 @@ func (m *CommitComposerModel) cleanupDiffForGit(c chunk.Chunk) (string, []string
 		return "", nil
 	}
 	
-	// Format the diff to ensure it's compatible with git apply
-	lines := strings.Split(diff, "\n")
-	var cleanLines []string
-	
-	for i, line := range lines {
-		// Check for null bytes or other control characters
-		if strings.Contains(line, "\x00") {
-			warning := fmt.Sprintf("Line %d contains null bytes (removed)", i+1)
-			log.Printf("Warning: %s", warning)
-			warnings = append(warnings, warning)
-			continue
-		}
-		
-		// Ensure line endings are consistent
-		line = strings.TrimRight(line, "\r")
-		
-		// Check if the line is a valid diff line
-		if line == "" || 
-		   strings.HasPrefix(line, "diff ") || 
-		   strings.HasPrefix(line, "index ") || 
-		   strings.HasPrefix(line, "--- ") || 
-		   strings.HasPrefix(line, "+++ ") || 
-		   strings.HasPrefix(line, "@@") || 
-		   strings.HasPrefix(line, " ") || 
-		   strings.HasPrefix(line, "+") || 
-		   strings.HasPrefix(line, "-") {
-			cleanLines = append(cleanLines, line)
-		} else {
-			warning := fmt.Sprintf("Line %d has invalid diff format (removed): %s", i+1, line)
-			log.Printf("Warning: %s", warning)
-			warnings = append(warnings, warning)
-		}
+	// Ensure the diff ends with a newline for proper git apply
+	if !strings.HasSuffix(diff, "\n") {
+		diff = diff + "\n"
 	}
 	
-	return strings.Join(cleanLines, "\n"), warnings
+	// Check for null bytes which would corrupt the patch
+	if strings.Contains(diff, "\x00") {
+		warning := "Diff contains null bytes (file may be binary)"
+		log.Printf("Warning: %s for file %s", warning, c.FilePath)
+		warnings = append(warnings, warning)
+		return "", warnings
+	}
+	
+	// Normalize line endings
+	diff = strings.ReplaceAll(diff, "\r\n", "\n")
+	
+	return diff, warnings
 }
 
 // errMsg represents an error message

@@ -283,5 +283,5 @@ func computeSimpleDiff(oldLines, newLines []string) string {
 		result = append(result, " "+oldLines[i])
 	}
 
-	return strings.Join(result, "\n")
+	return strings.Join(result, "\n") + "\n"
 }

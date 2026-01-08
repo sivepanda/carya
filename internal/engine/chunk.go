@@ -78,3 +78,8 @@ func (e *Engine) ForceFlush(filePath string) error {
 func (e *Engine) FlushAll() error {
 	return e.chunkManager.FlushAll()
 }
+
+// FlushStatus returns the current flush interval and idle state.
+func (e *Engine) FlushStatus() (interval time.Duration, isIdle bool) {
+	return e.chunkManager.FlushStatus()
+}

@@ -63,3 +63,8 @@ func (r *Repository) PIDPath() string {
 func (r *Repository) LogPath() string {
 	return filepath.Join(r.caryaPath, "carya.log")
 }
+
+// StatusPath returns the path to the daemon status file
+func (r *Repository) StatusPath() string {
+	return filepath.Join(r.caryaPath, "status.json")
+}

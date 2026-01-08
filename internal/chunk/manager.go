@@ -211,3 +211,14 @@ func (m *Manager) switchToActiveMode() {
 	m.isIdle = false
 	m.ticker.Reset(m.activeInterval)
 }
+
+// FlushStatus returns the current flush interval and idle state.
+func (m *Manager) FlushStatus() (interval time.Duration, isIdle bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	if m.isIdle {
+		return m.idleInterval, true
+	}
+	return m.activeInterval, false
+}
