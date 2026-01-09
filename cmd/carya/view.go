@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"carya/internal/repository"
-	"carya/internal/tui"
+	"carya/internal/tui/model"
 
 	"github.com/spf13/cobra"
 )
@@ -40,7 +40,7 @@ var viewCmd = &cobra.Command{
 		}
 
 		// Run the diff viewer
-		if err := tui.RunDiffViewer(dbPath); err != nil {
+		if err := model.RunDiffViewer(dbPath); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running diff viewer: %v\n", err)
 			os.Exit(1)
 		}

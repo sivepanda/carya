@@ -6,7 +6,7 @@ import (
 
 	"carya/internal/daemon"
 	"carya/internal/repository"
-	"carya/internal/tui"
+	"carya/internal/tui/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -19,8 +19,8 @@ var initCmd = &cobra.Command{
 	Long:  `initialize a new Carya repository in the current directory and starts watching for file changes.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		// Create and run the TUI model
-		model := tui.NewInitModel()
-		p := tea.NewProgram(&model)
+		initModel := model.NewInit()
+		p := tea.NewProgram(&initModel)
 		finalModel, err := p.Run()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error running initialization: %v\n", err)
@@ -28,10 +28,10 @@ var initCmd = &cobra.Command{
 		}
 
 		// Check if we should launch housekeeping setup or start daemon
-		if initModel, ok := finalModel.(*tui.InitModel); ok {
+		if initModel, ok := finalModel.(*model.Init); ok {
 			if initModel.ShouldLaunchHousekeeping() {
 				// Launch housekeeping TUI
-				housekeepingModel := tui.NewHousekeepingModel()
+				housekeepingModel := model.NewHousekeeping()
 				p := tea.NewProgram(housekeepingModel)
 				if _, err := p.Run(); err != nil {
 					fmt.Fprintf(os.Stderr, "Error running housekeeping setup: %v\n", err)

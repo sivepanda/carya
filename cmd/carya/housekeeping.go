@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"carya/internal/housekeeping"
-	"carya/internal/tui"
+	"carya/internal/tui/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -17,7 +17,7 @@ var housekeepingCmd = &cobra.Command{
 	Long:  `Manage housekeeping commands that run automatically after git operations like pull and checkout.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		// Run interactive TUI by default
-		m := tui.NewHousekeepingModel()
+		m := model.NewHousekeeping()
 		p := tea.NewProgram(m)
 		if _, err := p.Run(); err != nil {
 			fmt.Printf("Error running interactive setup: %v\n", err)
@@ -273,7 +273,7 @@ var housekeepingSetupCmd = &cobra.Command{
 	Short: "Interactive setup for housekeeping commands",
 	Long:  `Launch an interactive UI to detect package managers and select which housekeeping commands to add.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		m := tui.NewHousekeepingModel()
+		m := model.NewHousekeeping()
 		p := tea.NewProgram(m)
 		if _, err := p.Run(); err != nil {
 			fmt.Printf("Error running interactive setup: %v\n", err)

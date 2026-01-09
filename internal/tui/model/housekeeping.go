@@ -1,12 +1,12 @@
-package tui
+package model
 
 import (
 	"bufio"
+	"carya/internal/housekeeping"
+	"carya/internal/tui"
 	"fmt"
 	"os"
 	"strings"
-
-	"carya/internal/housekeeping"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -45,10 +45,10 @@ type PackageItem struct {
 	Selected bool
 }
 
-// HousekeepingModel represents the Bubble Tea model for housekeeping setup
-type HousekeepingModel struct {
+// Housekeeping represents the Bubble Tea model for housekeeping setup
+type Housekeeping struct {
 	help              help.Model
-	keys              KeyMap
+	keys              tui.KeyMap
 	state             int
 	cursor            int
 	detector          *housekeeping.Detector
@@ -70,13 +70,13 @@ type HousekeepingModel struct {
 	addedCount        int
 }
 
-// NewHousekeepingModel creates a new housekeeping model
-func NewHousekeepingModel() HousekeepingModel {
+// NewHousekeeping creates a new housekeeping model
+func NewHousekeeping() Housekeeping {
 	h := help.New()
-	h.Styles.ShortDesc = HelpDescStyle
-	h.Styles.ShortKey = HelpKeyStyle
-	h.Styles.FullDesc = HelpDescStyle
-	h.Styles.FullKey = HelpKeyStyle
+	h.Styles.ShortDesc = tui.HelpDescStyle
+	h.Styles.ShortKey = tui.HelpKeyStyle
+	h.Styles.FullDesc = tui.HelpDescStyle
+	h.Styles.FullKey = tui.HelpKeyStyle
 
 	detector := housekeeping.NewDetector(".")
 
@@ -97,9 +97,9 @@ func NewHousekeepingModel() HousekeepingModel {
 	descriptionInput.CharLimit = 256
 	descriptionInput.Width = 50
 
-	m := HousekeepingModel{
+	m := Housekeeping{
 		help:     h,
-		keys:     DefaultKeys(),
+		keys:     tui.DefaultKeys(),
 		state:    HKStateDetecting,
 		detector: detector,
 		width:    80,
@@ -114,7 +114,7 @@ func NewHousekeepingModel() HousekeepingModel {
 }
 
 // Init initializes the model
-func (m HousekeepingModel) Init() tea.Cmd {
+func (m Housekeeping) Init() tea.Cmd {
 	return m.detectPackages()
 }
 
@@ -170,7 +170,7 @@ func ensureCaryaDirectory() error {
 }
 
 // detectPackages runs package detection
-func (m HousekeepingModel) detectPackages() tea.Cmd {
+func (m Housekeeping) detectPackages() tea.Cmd {
 	return func() tea.Msg {
 		// Ensure .carya directory exists first
 		if err := ensureCaryaDirectory(); err != nil {
@@ -196,7 +196,7 @@ func (m HousekeepingModel) detectPackages() tea.Cmd {
 }
 
 // getSuggestions retrieves suggestions for the current category being processed
-func (m HousekeepingModel) getSuggestions() tea.Cmd {
+func (m Housekeeping) getSuggestions() tea.Cmd {
 	return func() tea.Msg {
 		categoryName := m.categories[m.currentCategory].Name
 
@@ -232,7 +232,7 @@ func (m HousekeepingModel) getSuggestions() tea.Cmd {
 }
 
 // addSelectedCommands adds the selected commands to the config
-func (m HousekeepingModel) addSelectedCommands() tea.Cmd {
+func (m Housekeeping) addSelectedCommands() tea.Cmd {
 	return func() tea.Msg {
 		categoryName := m.categories[m.currentCategory].Name
 		count := 0
@@ -288,7 +288,7 @@ type CommandsAddedMsg struct {
 }
 
 // Update handles messages and updates the model
-func (m HousekeepingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Housekeeping) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case DetectionCompleteMsg:
 		if msg.Error != nil {
@@ -568,17 +568,17 @@ func (m HousekeepingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // View renders the model
-func (m HousekeepingModel) View() string {
+func (m Housekeeping) View() string {
 	var content string
 
 	switch m.state {
 	case HKStateDetecting:
-		title := TitleStyle.Render(IconSettings + " HOUSEKEEPING SETUP")
+		title := tui.TitleStyle.Render(tui.IconSettings + " HOUSEKEEPING SETUP")
 
-		spinner := SubtleTextStyle.Render(IconSpinner)
-		detectingText := TextStyle.Render("  Detecting package managers and build systems...")
+		spinner := tui.SubtleTextStyle.Render(tui.IconSpinner)
+		detectingText := tui.TextStyle.Render("  Detecting package managers and build systems...")
 
-		box := BoxStyle.Width(60).Render(
+		box := tui.BoxStyle.Width(60).Render(
 			lipgloss.JoinVertical(lipgloss.Left,
 				spinner+" "+detectingText,
 			),
@@ -587,112 +587,112 @@ func (m HousekeepingModel) View() string {
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", box)
 
 	case HKStatePackageSelect:
-		title := TitleStyle.Render(IconCheck + " DETECTED PACKAGES")
+		title := tui.TitleStyle.Render(tui.IconCheck + " DETECTED PACKAGES")
 
-		packageTitle := HeaderStyle.Margin(0, 0, ComponentGap, 0).Render("Select which package managers to use:")
+		packageTitle := tui.HeaderStyle.Margin(0, 0, tui.ComponentGap, 0).Render("Select which package managers to use:")
 
 		// Show package selection
 		var options []string
 		for i, pkgItem := range m.packages {
 			cursor := "  "
 			if m.packageCursor == i {
-				cursor = IconCursor + " "
+				cursor = tui.IconCursor + " "
 			}
 
-			checkbox := IconCheckbox
+			checkbox := tui.IconCheckbox
 			if pkgItem.Selected {
-				checkbox = IconChecked
+				checkbox = tui.IconChecked
 			}
 
 			line := cursor + checkbox + " " + pkgItem.Package.Type.Description
 			if m.packageCursor == i {
-				line = SelectedItemStyle.Render(line)
+				line = tui.SelectedItemStyle.Render(line)
 			} else {
-				line = ItemStyle.Render(line)
+				line = tui.ItemStyle.Render(line)
 			}
 			options = append(options, line)
 		}
 
-		packagesBox := BoxStyle.Width(60).Render(
+		packagesBox := tui.BoxStyle.Width(60).Render(
 			lipgloss.JoinVertical(lipgloss.Left, options...),
 		)
 
-		instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
+		instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", packageTitle, packagesBox, instructions)
 
 	case HKStateCategorySelect:
-		title := TitleStyle.Render(IconCheck + " SELECTED PACKAGES")
+		title := tui.TitleStyle.Render(tui.IconCheck + " SELECTED PACKAGES")
 
 		// Show selected packages in a box
 		var selectedList []string
 		for _, pkgItem := range m.packages {
 			if pkgItem.Selected {
-				selectedList = append(selectedList, SubtleTextStyle.Render("  "+IconBullet)+" "+TextStyle.Render(pkgItem.Package.Type.Description))
+				selectedList = append(selectedList, tui.SubtleTextStyle.Render("  "+tui.IconBullet)+" "+tui.TextStyle.Render(pkgItem.Package.Type.Description))
 			}
 		}
 
-		packagesBox := DimBoxStyle.Width(60).Render(
+		packagesBox := tui.DimBoxStyle.Width(60).Render(
 			lipgloss.JoinVertical(lipgloss.Left, selectedList...),
 		)
 
 		// Show category selection
-		categoryTitle := HeaderStyle.Margin(SectionGap, 0, ComponentGap, 0).Render("Select categories to configure:")
+		categoryTitle := tui.HeaderStyle.Margin(tui.SectionGap, 0, tui.ComponentGap, 0).Render("Select categories to configure:")
 
 		var options []string
 		for i, category := range m.categories {
 			cursor := "  "
 			if m.categoryCursor == i {
-				cursor = IconCursor + " "
+				cursor = tui.IconCursor + " "
 			}
 
-			checkbox := IconCheckbox
+			checkbox := tui.IconCheckbox
 			if category.Selected {
-				checkbox = IconChecked
+				checkbox = tui.IconChecked
 			}
 
 			line := cursor + checkbox + " " + category.Name
 			if m.categoryCursor == i {
-				line = SelectedItemStyle.Render(line)
+				line = tui.SelectedItemStyle.Render(line)
 			} else {
-				line = ItemStyle.Render(line)
+				line = tui.ItemStyle.Render(line)
 			}
 			options = append(options, line)
 		}
 
-		optionsBox := BoxStyle.Width(60).Render(
+		optionsBox := tui.BoxStyle.Width(60).Render(
 			lipgloss.JoinVertical(lipgloss.Left, options...),
 		)
 
-		instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
+		instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", packagesBox, categoryTitle, optionsBox, instructions)
 
 	case HKStateCommandSelect:
 		currentCategoryName := m.categories[m.currentCategory].Name
-		title := TitleStyle.Render(fmt.Sprintf(IconSettings+" %s COMMANDS", strings.ToUpper(currentCategoryName)))
+		title := tui.TitleStyle.Render(fmt.Sprintf(tui.IconSettings+" %s COMMANDS", strings.ToUpper(currentCategoryName)))
 
 		var options []string
 		for i, item := range m.suggestions {
 			cursor := "  "
 			if m.cursor == i {
-				cursor = IconCursor + " "
+				cursor = tui.IconCursor + " "
 			}
 
-			checkbox := IconCheckbox
+			checkbox := tui.IconCheckbox
 			if item.Selected {
-				checkbox = IconChecked
+				checkbox = tui.IconChecked
 			}
 
 			line := cursor + checkbox + " " + item.Command.Description
 			cmdLine := "    " + item.Command.Command
 
 			if m.cursor == i {
-				line = SelectedItemStyle.Render(line)
-				cmdLine = SubtleTextStyle.Render(cmdLine)
+				line = tui.SelectedItemStyle.Render(line)
+				cmdLine = tui.SubtleTextStyle.Render(cmdLine)
 			} else {
-				line = ItemStyle.Render(line)
-				cmdLine = HelpDescStyle.Render(cmdLine)
+				line = tui.ItemStyle.Render(line)
+				cmdLine = tui.HelpDescStyle.Render(cmdLine)
 			}
 
 			options = append(options, line)
@@ -702,19 +702,19 @@ func (m HousekeepingModel) View() string {
 			}
 		}
 
-		commandsBox := ActiveBoxStyle.Width(70).Render(
+		commandsBox := tui.ActiveBoxStyle.Width(70).Render(
 			lipgloss.JoinVertical(lipgloss.Left, options...),
 		)
 
-		instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • i add manual • enter continue")
+		instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • i add manual • enter continue")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", commandsBox, instructions)
 
 	case HKStateManualInput:
 		currentCategoryName := m.categories[m.currentCategory].Name
-		title := TitleStyle.Render(fmt.Sprintf(IconSettings+" ADD MANUAL COMMAND (%s)", strings.ToUpper(currentCategoryName)))
+		title := tui.TitleStyle.Render(fmt.Sprintf(tui.IconSettings+" ADD MANUAL COMMAND (%s)", strings.ToUpper(currentCategoryName)))
 
-		formTitle := HeaderStyle.Margin(0, 0, ComponentGap, 0).Render("Enter command details:")
+		formTitle := tui.HeaderStyle.Margin(0, 0, tui.ComponentGap, 0).Render("Enter command details:")
 
 		// Build the form
 		var formFields []string
@@ -723,9 +723,9 @@ func (m HousekeepingModel) View() string {
 		for i, input := range m.manualInputs {
 			label := labels[i]
 			if i == m.manualInputFocus {
-				label = SelectedItemStyle.Render(label)
+				label = tui.SelectedItemStyle.Render(label)
 			} else {
-				label = TextStyle.Render(label)
+				label = tui.TextStyle.Render(label)
 			}
 			formFields = append(formFields, label)
 			formFields = append(formFields, "  "+input.View())
@@ -734,16 +734,16 @@ func (m HousekeepingModel) View() string {
 			}
 		}
 
-		formBox := BoxStyle.Width(70).Render(
+		formBox := tui.BoxStyle.Width(70).Render(
 			lipgloss.JoinVertical(lipgloss.Left, formFields...),
 		)
 
-		instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("tab/↑/↓ navigate fields • enter submit • esc cancel")
+		instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("tab/↑/↓ navigate fields • enter submit • esc cancel")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", formTitle, formBox, instructions)
 
 	case HKStateConfirm:
-		title := TitleStyle.Render(IconCheck + " CONFIRM SELECTION")
+		title := tui.TitleStyle.Render(tui.IconCheck + " CONFIRM SELECTION")
 
 		// Count selected
 		selectedCount := 0
@@ -751,28 +751,28 @@ func (m HousekeepingModel) View() string {
 		for _, item := range m.suggestions {
 			if item.Selected {
 				selectedCount++
-				selectedList = append(selectedList, SubtleTextStyle.Render("  "+IconBullet)+" "+TextStyle.Render(item.Command.Description))
+				selectedList = append(selectedList, tui.SubtleTextStyle.Render("  "+tui.IconBullet)+" "+tui.TextStyle.Render(item.Command.Description))
 			}
 		}
 
 		currentCategoryName := m.categories[m.currentCategory].Name
-		countHeader := HeaderStyle.Render(fmt.Sprintf("Ready to add %d %s commands:", selectedCount, currentCategoryName))
+		countHeader := tui.HeaderStyle.Render(fmt.Sprintf("Ready to add %d %s commands:", selectedCount, currentCategoryName))
 
-		summaryBox := BoxStyle.Width(70).Render(
+		summaryBox := tui.BoxStyle.Width(70).Render(
 			lipgloss.JoinVertical(lipgloss.Left, selectedList...),
 		)
 
-		instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("enter confirm • q cancel")
+		instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("enter confirm • q cancel")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", countHeader, "", summaryBox, instructions)
 
 	case HKStateExecute:
-		title := TitleStyle.Render(IconSettings + " PROCESSING")
+		title := tui.TitleStyle.Render(tui.IconSettings + " PROCESSING")
 
-		spinner := SubtleTextStyle.Render(IconSpinner)
-		executionText := TextStyle.Render("  Adding selected commands to configuration...")
+		spinner := tui.SubtleTextStyle.Render(tui.IconSpinner)
+		executionText := tui.TextStyle.Render("  Adding selected commands to configuration...")
 
-		box := BoxStyle.Width(60).Render(
+		box := tui.BoxStyle.Width(60).Render(
 			lipgloss.JoinVertical(lipgloss.Left,
 				spinner+" "+executionText,
 			),
@@ -782,20 +782,20 @@ func (m HousekeepingModel) View() string {
 
 	case HKStateComplete:
 		if m.err != nil {
-			title := ErrorStyle.Render(IconCross + " ERROR")
-			errorMsg := ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
+			title := tui.ErrorStyle.Render(tui.IconCross + " ERROR")
+			errorMsg := tui.ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
 
 			errorBox := lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorError).
-				Padding(DefaultPadding, DefaultPadding*2).
+				BorderForeground(tui.ColorError).
+				Padding(tui.DefaultPadding, tui.DefaultPadding*2).
 				Width(60).
 				Render(errorMsg)
 
-			instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("enter exit")
+			instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("enter exit")
 			content = lipgloss.JoinVertical(lipgloss.Left, title, "", errorBox, instructions)
 		} else {
-			title := SuccessStyle.Render(IconCheck + " COMPLETE")
+			title := tui.SuccessStyle.Render(tui.IconCheck + " COMPLETE")
 
 			// Count how many categories were selected
 			selectedCategories := []string{}
@@ -806,16 +806,16 @@ func (m HousekeepingModel) View() string {
 			}
 
 			categoryText := strings.Join(selectedCategories, " and ")
-			successMsg := SuccessStyle.Render(fmt.Sprintf("Successfully added %d commands for %s!", m.addedCount, categoryText))
+			successMsg := tui.SuccessStyle.Render(fmt.Sprintf("Successfully added %d commands for %s!", m.addedCount, categoryText))
 
 			successBox := lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorSuccess).
-				Padding(DefaultPadding, DefaultPadding*2).
+				BorderForeground(tui.ColorSuccess).
+				Padding(tui.DefaultPadding, tui.DefaultPadding*2).
 				Width(60).
 				Render(successMsg)
 
-			instructions := HelpDescStyle.Margin(ComponentGap, 0, 0, 0).Render("enter exit")
+			instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("enter exit")
 			content = lipgloss.JoinVertical(lipgloss.Left, title, "", successBox, instructions)
 		}
 	}
@@ -823,7 +823,7 @@ func (m HousekeepingModel) View() string {
 	// Add help view at the bottom
 	m.help.ShowAll = m.showAll
 	helpView := m.help.View(m.keys)
-	helpText := HelpStyle.Render(helpView)
+	helpText := tui.HelpStyle.Render(helpView)
 
 	return lipgloss.JoinVertical(lipgloss.Left, content, helpText)
 }

@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"carya/internal/repository"
-	"carya/internal/tui"
+	"carya/internal/tui/model"
 
 	"github.com/spf13/cobra"
 )
@@ -55,7 +55,7 @@ var composeCmd = &cobra.Command{
 		}
 
 		// Run the commit composer
-		if err := tui.RunCommitComposer(dbPath); err != nil {
+		if err := model.RunCommitComposer(dbPath); err != nil {
 			log.Printf("Error running commit composer: %v", err)
 			fmt.Fprintf(os.Stderr, "Error running commit composer: %v\n", err)
 			os.Exit(1)

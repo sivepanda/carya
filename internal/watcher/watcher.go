@@ -179,7 +179,13 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 				return
 			}
 			if w.handler != nil {
-				w.handler.OnFileChange(event.Name, contents)
+				// Convert absolute path to relative path
+				relPath, err := filepath.Rel(w.watchDir, event.Name)
+				if err != nil {
+					log.Printf("Failed to get relative path for %s: %v", event.Name, err)
+					relPath = event.Name
+				}
+				w.handler.OnFileChange(relPath, contents)
 			}
 		}
 	}

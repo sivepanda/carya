@@ -1,6 +1,7 @@
-package tui
+package model
 
 import (
+	"carya/internal/tui"
 	"fmt"
 
 	initializer "carya/internal/init"
@@ -32,10 +33,10 @@ var availableFeatures = []Feature{
 	{"Automated Housekeeping", "housekeep", "Automated repository maintenance"},
 }
 
-// InitModel represents the Bubble Tea model for the init command
-type InitModel struct {
+// Init represents the Bubble Tea model for the init command
+type Init struct {
 	help               help.Model
-	keys               KeyMap
+	keys               tui.KeyMap
 	state              int
 	cursor             int
 	selectedFeatures   map[string]bool
@@ -47,17 +48,17 @@ type InitModel struct {
 	launchHousekeeping bool
 }
 
-// NewInitModel creates a new init model
-func NewInitModel() InitModel {
+// NewInit creates a new init model
+func NewInit() Init {
 	h := help.New()
-	h.Styles.ShortDesc = HelpDescStyle
-	h.Styles.ShortKey = HelpKeyStyle
-	h.Styles.FullDesc = HelpDescStyle
-	h.Styles.FullKey = HelpKeyStyle
+	h.Styles.ShortDesc = tui.HelpDescStyle
+	h.Styles.ShortKey = tui.HelpKeyStyle
+	h.Styles.FullDesc = tui.HelpDescStyle
+	h.Styles.FullKey = tui.HelpKeyStyle
 
-	m := InitModel{
+	m := Init{
 		help:             h,
-		keys:             DefaultKeys(),
+		keys:             tui.DefaultKeys(),
 		state:            StateWelcome,
 		width:            80,
 		selectedFeatures: make(map[string]bool),
@@ -68,12 +69,12 @@ func NewInitModel() InitModel {
 }
 
 // Init initializes the model
-func (m *InitModel) Init() tea.Cmd {
+func (m *Init) Init() tea.Cmd {
 	return nil
 }
 
 // handleFormSubmission processes the form data and executes the setup
-func (m *InitModel) handleFormSubmission() tea.Cmd {
+func (m *Init) handleFormSubmission() tea.Cmd {
 	return func() tea.Msg {
 		// Get the selected features from the model
 		selectedFeatures := m.getSelectedFeatures()
@@ -115,17 +116,17 @@ type FormSubmittedMsg struct {
 }
 
 // ShouldLaunchHousekeeping returns true if the housekeeping TUI should be launched
-func (m *InitModel) ShouldLaunchHousekeeping() bool {
+func (m *Init) ShouldLaunchHousekeeping() bool {
 	return m.launchHousekeeping
 }
 
 // IsFeatureEnabled returns true if a feature is enabled
-func (m *InitModel) IsFeatureEnabled(featureKey string) bool {
+func (m *Init) IsFeatureEnabled(featureKey string) bool {
 	return m.selectedFeatures[featureKey]
 }
 
 // Update handles messages and updates the model
-func (m *InitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Init) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case FormSubmittedMsg:
 		if msg.Error != nil {
@@ -208,7 +209,7 @@ func (m *InitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // getSelectedFeatures returns a slice of selected feature keys
-func (m *InitModel) getSelectedFeatures() []string {
+func (m *Init) getSelectedFeatures() []string {
 	var selected []string
 	for _, feature := range availableFeatures {
 		if m.selectedFeatures[feature.Key] {
@@ -219,25 +220,25 @@ func (m *InitModel) getSelectedFeatures() []string {
 }
 
 // View renders the model
-func (m *InitModel) View() string {
+func (m *Init) View() string {
 	var content string
 
 	switch m.state {
 	case StateWelcome:
 		asciiStyle := lipgloss.NewStyle().
-			Foreground(ColorTitle).
+			Foreground(tui.ColorTitle).
 			Bold(true)
-		title := asciiStyle.Render(CaryaASCII)
+		title := asciiStyle.Render(tui.CaryaASCII)
 
-		welcomeBox := BoxStyle.
+		welcomeBox := tui.BoxStyle.
 			Width(60).
 			Align(lipgloss.Center).
-			Render(HeaderStyle.Render("Hit 'Enter' to begin the setup process!"))
+			Render(tui.HeaderStyle.Render("Hit 'Enter' to begin the setup process!"))
 
 		content = lipgloss.JoinVertical(lipgloss.Center, title, "", welcomeBox)
 
 	case StateFeatureSelect:
-		title := TitleStyle.Render("⚙ SELECT FEATURES")
+		title := tui.TitleStyle.Render("⚙ SELECT FEATURES")
 
 		var options []string
 		for i, feature := range availableFeatures {
@@ -255,11 +256,11 @@ func (m *InitModel) View() string {
 			desc := "    " + feature.Description
 
 			if m.cursor == i {
-				line = SelectedItemStyle.Render(line)
-				desc = SubtleTextStyle.Render(desc)
+				line = tui.SelectedItemStyle.Render(line)
+				desc = tui.SubtleTextStyle.Render(desc)
 			} else {
-				line = ItemStyle.Render(line)
-				desc = HelpDescStyle.Render(desc)
+				line = tui.ItemStyle.Render(line)
+				desc = tui.HelpDescStyle.Render(desc)
 			}
 
 			options = append(options, line)
@@ -269,84 +270,84 @@ func (m *InitModel) View() string {
 			}
 		}
 
-		featuresBox := ActiveBoxStyle.Width(70).Render(
+		featuresBox := tui.ActiveBoxStyle.Width(70).Render(
 			lipgloss.JoinVertical(lipgloss.Left, options...),
 		)
 
-		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
+		instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", featuresBox, instructions)
 
 	case StateConfirm:
-		title := TitleStyle.Render("✓ CONFIRM SELECTION")
+		title := tui.TitleStyle.Render("✓ CONFIRM SELECTION")
 
 		// Show selected features
 		selected := m.getSelectedFeatures()
 		var summaryContent []string
 		if len(selected) == 0 {
-			summaryContent = append(summaryContent, SubtleTextStyle.Render("No features selected"))
-			summaryContent = append(summaryContent, TextStyle.Render("Basic Carya configuration will be initialized"))
+			summaryContent = append(summaryContent, tui.SubtleTextStyle.Render("No features selected"))
+			summaryContent = append(summaryContent, tui.TextStyle.Render("Basic Carya configuration will be initialized"))
 		} else {
 			for _, featureKey := range selected {
 				for _, feature := range availableFeatures {
 					if feature.Key == featureKey {
-						summaryContent = append(summaryContent, SubtleTextStyle.Render("  ●")+" "+TextStyle.Render(feature.Name))
+						summaryContent = append(summaryContent, tui.SubtleTextStyle.Render("  ●")+" "+tui.TextStyle.Render(feature.Name))
 						break
 					}
 				}
 			}
 		}
 
-		summaryBox := DimBoxStyle.Width(60).Render(
+		summaryBox := tui.DimBoxStyle.Width(60).Render(
 			lipgloss.JoinVertical(lipgloss.Left, summaryContent...),
 		)
 
 		// Show confirmation options
-		questionHeader := HeaderStyle.Margin(2, 0, 1, 0).Render("Proceed with setup?")
+		questionHeader := tui.HeaderStyle.Margin(2, 0, 1, 0).Render("Proceed with setup?")
 
 		yesOption := "  Yes, proceed with setup"
 		noOption := "  No, go back to feature selection"
 
 		if m.confirmSelection {
-			yesOption = SelectedItemStyle.Render("❯ Yes, proceed with setup")
-			noOption = ItemStyle.Render("  No, go back to feature selection")
+			yesOption = tui.SelectedItemStyle.Render("❯ Yes, proceed with setup")
+			noOption = tui.ItemStyle.Render("  No, go back to feature selection")
 		} else {
-			yesOption = ItemStyle.Render("  Yes, proceed with setup")
-			noOption = SelectedItemStyle.Render("❯ No, go back to feature selection")
+			yesOption = tui.ItemStyle.Render("  Yes, proceed with setup")
+			noOption = tui.SelectedItemStyle.Render("❯ No, go back to feature selection")
 		}
 
-		choicesBox := BoxStyle.Width(60).Render(
+		choicesBox := tui.BoxStyle.Width(60).Render(
 			lipgloss.JoinVertical(lipgloss.Left, yesOption, noOption),
 		)
 
-		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("↑/↓ navigate • enter confirm")
+		instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("↑/↓ navigate • enter confirm")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", summaryBox, questionHeader, choicesBox, instructions)
 
 	case StateExecute:
-		title := TitleStyle.Render("⚙ PROCESSING")
+		title := tui.TitleStyle.Render("⚙ PROCESSING")
 
 		selected := m.getSelectedFeatures()
 		var summaryLines []string
 
-		spinner := SubtleTextStyle.Render("◐")
+		spinner := tui.SubtleTextStyle.Render("◐")
 
 		if len(selected) == 0 {
-			summaryLines = append(summaryLines, spinner+" "+TextStyle.Render("Initializing basic Carya configuration..."))
+			summaryLines = append(summaryLines, spinner+" "+tui.TextStyle.Render("Initializing basic Carya configuration..."))
 		} else {
 			for _, featureKey := range selected {
 				for _, feature := range availableFeatures {
 					if feature.Key == featureKey {
-						summaryLines = append(summaryLines, SuccessStyle.Render("✓")+" "+TextStyle.Render(feature.Name))
+						summaryLines = append(summaryLines, tui.SuccessStyle.Render("✓")+" "+tui.TextStyle.Render(feature.Name))
 						break
 					}
 				}
 			}
 			summaryLines = append(summaryLines, "")
-			summaryLines = append(summaryLines, spinner+" "+TextStyle.Render("Setting up your repository..."))
+			summaryLines = append(summaryLines, spinner+" "+tui.TextStyle.Render("Setting up your repository..."))
 		}
 
-		processingBox := BoxStyle.Width(60).Render(
+		processingBox := tui.BoxStyle.Width(60).Render(
 			lipgloss.JoinVertical(lipgloss.Left, summaryLines...),
 		)
 
@@ -355,50 +356,50 @@ func (m *InitModel) View() string {
 	case StateComplete:
 		if m.err != nil {
 			// Show error state
-			title := ErrorStyle.Render("✗ SETUP FAILED")
-			errorMsg := ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
+			title := tui.ErrorStyle.Render("✗ SETUP FAILED")
+			errorMsg := tui.ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
 
 			errorBox := lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorError).
+				BorderForeground(tui.ColorError).
 				Padding(1, 2).
 				Width(60).
 				Render(errorMsg)
 
-			instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("enter exit")
+			instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("enter exit")
 			content = lipgloss.JoinVertical(lipgloss.Left, title, "", errorBox, instructions)
 		} else if m.launchHousekeeping {
 			// Show housekeeping launch message
-			title := SuccessStyle.Render("✓ SETUP COMPLETE")
+			title := tui.SuccessStyle.Render("✓ SETUP COMPLETE")
 
 			var msgLines []string
-			msgLines = append(msgLines, TextStyle.Render("Basic Carya repository initialized"))
+			msgLines = append(msgLines, tui.TextStyle.Render("Basic Carya repository initialized"))
 			msgLines = append(msgLines, "")
-			msgLines = append(msgLines, HeaderStyle.Render("→ Launching housekeeping setup..."))
+			msgLines = append(msgLines, tui.HeaderStyle.Render("→ Launching housekeeping setup..."))
 
 			launchBox := lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorSuccess).
+				BorderForeground(tui.ColorSuccess).
 				Padding(1, 2).
 				Width(60).
 				Render(lipgloss.JoinVertical(lipgloss.Left, msgLines...))
 
-			instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("enter continue")
+			instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("enter continue")
 			content = lipgloss.JoinVertical(lipgloss.Left, title, "", launchBox, instructions)
 		} else {
 			// Show success state
-			title := SuccessStyle.Render("✓ SETUP COMPLETE")
+			title := tui.SuccessStyle.Render("✓ SETUP COMPLETE")
 
 			selected := m.getSelectedFeatures()
 			var summaryLines []string
 			if len(selected) == 0 {
-				summaryLines = append(summaryLines, TextStyle.Render("Basic Carya repository initialized"))
-				summaryLines = append(summaryLines, SubtleTextStyle.Render("(no features enabled)"))
+				summaryLines = append(summaryLines, tui.TextStyle.Render("Basic Carya repository initialized"))
+				summaryLines = append(summaryLines, tui.SubtleTextStyle.Render("(no features enabled)"))
 			} else {
 				for _, featureKey := range selected {
 					for _, feature := range availableFeatures {
 						if feature.Key == featureKey {
-							summaryLines = append(summaryLines, SuccessStyle.Render("✓")+" "+TextStyle.Render(feature.Name))
+							summaryLines = append(summaryLines, tui.SuccessStyle.Render("✓")+" "+tui.TextStyle.Render(feature.Name))
 							break
 						}
 					}
@@ -407,12 +408,12 @@ func (m *InitModel) View() string {
 
 			successBox := lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorSuccess).
+				BorderForeground(tui.ColorSuccess).
 				Padding(1, 2).
 				Width(60).
 				Render(lipgloss.JoinVertical(lipgloss.Left, summaryLines...))
 
-			instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("enter exit")
+			instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("enter exit")
 			content = lipgloss.JoinVertical(lipgloss.Left, title, "", successBox, instructions)
 		}
 	}
@@ -421,7 +422,7 @@ func (m *InitModel) View() string {
 	if m.showAll {
 		m.help.ShowAll = true
 		helpView := m.help.View(m.keys)
-		help := HelpStyle.Render(helpView)
+		help := tui.HelpStyle.Render(helpView)
 		return lipgloss.JoinVertical(lipgloss.Left, content, help)
 	}
 
