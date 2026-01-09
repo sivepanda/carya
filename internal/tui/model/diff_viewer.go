@@ -4,7 +4,11 @@ import (
 	"carya/internal/chunk"
 	"carya/internal/repository"
 	"carya/internal/store"
+<<<<<<< Updated upstream:internal/tui/model/diff_viewer.go
 	"carya/internal/tui"
+=======
+	"carya/internal/tui/shared"
+>>>>>>> Stashed changes:internal/tui/diff_viewer.go
 	"fmt"
 	"log"
 	"os"
@@ -102,23 +106,16 @@ func (m *DiffViewer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// Split width: 40% for list, 60% for diff
-		m.listWidth = int(float64(msg.Width) * 0.4)
-		m.diffWidth = msg.Width - m.listWidth
-
-		headerHeight := 2
-		footerHeight := 2
-		contentHeight := msg.Height - headerHeight - footerHeight
+		// Calculate split view layout
+		layout := shared.CalculateSplitViewLayout(msg.Width, msg.Height, 2, 2)
+		m.listWidth = layout.ListWidth
+		m.diffWidth = layout.DiffWidth
 
 		if !m.ready {
-			m.listViewport = viewport.New(m.listWidth-2, contentHeight)
-			m.diffViewport = viewport.New(m.diffWidth-2, contentHeight)
+			m.listViewport, m.diffViewport = shared.InitializeViewports(layout)
 			m.ready = true
 		} else {
-			m.listViewport.Width = m.listWidth - 2
-			m.listViewport.Height = contentHeight
-			m.diffViewport.Width = m.diffWidth - 2
-			m.diffViewport.Height = contentHeight
+			shared.UpdateViewportSizes(&m.listViewport, &m.diffViewport, layout)
 		}
 
 		// Update diff content if chunks exist
@@ -252,11 +249,7 @@ func (m *DiffViewer) renderChunkListPanel() string {
 	m.listViewport.SetContent(strings.Join(items, "\n"))
 
 	// Ensure selected item is visible
-	if m.cursor < m.listViewport.YOffset {
-		m.listViewport.YOffset = m.cursor
-	} else if m.cursor >= m.listViewport.YOffset+m.listViewport.Height {
-		m.listViewport.YOffset = m.cursor - m.listViewport.Height + 1
-	}
+	shared.EnsureItemVisible(&m.listViewport, m.cursor)
 
 	listStyle := lipgloss.NewStyle().
 		Width(m.listWidth).
@@ -275,6 +268,7 @@ func (m *DiffViewer) renderDiffPanel() string {
 	}
 
 	c := m.chunks[m.cursor]
+<<<<<<< Updated upstream:internal/tui/model/diff_viewer.go
 
 	// Create header with chunk info
 	fileLabel := tui.SubtleTextStyle.Render("File:")
@@ -296,6 +290,10 @@ func (m *DiffViewer) renderDiffPanel() string {
 		Padding(0, 1)
 
 	return diffStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, m.diffViewport.View()))
+=======
+	header := shared.RenderChunkHeader(c, SubtleTextStyle, TextStyle.Bold(true))
+	return shared.RenderDiffPanel(header, m.diffViewport.View(), m.diffWidth, m.height, ColorTitle)
+>>>>>>> Stashed changes:internal/tui/diff_viewer.go
 }
 
 // updateDiffContent updates the diff viewport with the current chunk's diff
@@ -323,13 +321,18 @@ func (m *DiffViewer) updateDiffContent() {
 	log.Printf("Raw diff content:\n%s", c.Diff)
 
 	// Format the diff content with syntax highlighting
+<<<<<<< Updated upstream:internal/tui/model/diff_viewer.go
 	diffContent := m.formatDiff(c.Diff)
+=======
+	diffContent := chunk.FormatDiff(c.Diff)
+>>>>>>> Stashed changes:internal/tui/diff_viewer.go
 
 	// Set the content in the viewport
 	m.diffViewport.SetContent(diffContent)
 	m.diffViewport.GotoTop()
 }
 
+<<<<<<< Updated upstream:internal/tui/model/diff_viewer.go
 // formatDiff applies syntax highlighting to diff content
 func (m *DiffViewer) formatDiff(diff string) string {
 	// Check if this is a binary file message
@@ -393,6 +396,8 @@ func (m *DiffViewer) formatDiff(diff string) string {
 	return strings.Join(formatted, "\n")
 }
 
+=======
+>>>>>>> Stashed changes:internal/tui/diff_viewer.go
 // RunDiffViewer runs the diff viewer TUI
 func RunDiffViewer(dataSourceName string) error {
 	// Setup logging to the repo log file

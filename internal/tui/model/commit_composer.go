@@ -2,11 +2,15 @@ package model
 
 import (
 	"carya/internal/chunk"
+	"carya/internal/patch"
 	"carya/internal/store"
+<<<<<<< Updated upstream:internal/tui/model/commit_composer.go
 	"carya/internal/tui"
+=======
+	"carya/internal/tui/shared"
+>>>>>>> Stashed changes:internal/tui/commit_composer.go
 	"fmt"
 	"log"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -172,23 +176,16 @@ func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// Split width: 40% for list, 60% for diff
-		m.listWidth = int(float64(msg.Width) * 0.4)
-		m.diffWidth = msg.Width - m.listWidth
-
-		headerHeight := 2
-		footerHeight := 3
-		contentHeight := msg.Height - headerHeight - footerHeight
+		// Calculate split view layout
+		layout := shared.CalculateSplitViewLayout(msg.Width, msg.Height, 2, 3)
+		m.listWidth = layout.ListWidth
+		m.diffWidth = layout.DiffWidth
 
 		if !m.ready {
-			m.listViewport = viewport.New(m.listWidth-2, contentHeight)
-			m.diffViewport = viewport.New(m.diffWidth-2, contentHeight)
+			m.listViewport, m.diffViewport = shared.InitializeViewports(layout)
 			m.ready = true
 		} else {
-			m.listViewport.Width = m.listWidth - 2
-			m.listViewport.Height = contentHeight
-			m.diffViewport.Width = m.diffWidth - 2
-			m.diffViewport.Height = contentHeight
+			shared.UpdateViewportSizes(&m.listViewport, &m.diffViewport, layout)
 		}
 
 		// Update diff content if chunks exist
@@ -295,51 +292,47 @@ func (m *CommitComposer) updateConfirming(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *CommitComposer) createCommit() tea.Msg {
 	log.Println("Creating commit from selected diffs")
 
-	// First, create a patch from the selected diffs
+	// Create a patch from the selected diffs using the patch package
 	log.Println("Creating patch from selected diffs")
-	patch, cleanupWarnings := m.createPatchFromSelectedDiffs()
+	result := patch.CreateFromChunks(m.chunks, m.selectedChunks)
 
-	log.Printf(patch)
+	log.Printf("%s", result.Patch)
 
 	// Check if we have a valid patch
-	if len(patch) == 0 {
+	if len(result.Patch) == 0 {
 		log.Println("No valid patches to apply")
 		return errMsg{fmt.Errorf("no valid patches to apply")}
 	}
 
-	log.Printf("Created patch with %d bytes", len(patch))
+	log.Printf("Created patch with %d bytes", len(result.Patch))
 
 	// Log any cleanup warnings
-	if len(cleanupWarnings) > 0 {
+	if len(result.Warnings) > 0 {
 		log.Println("Warning: Potential corrupt content was detected and cleaned:")
-		for _, warning := range cleanupWarnings {
+		for _, warning := range result.Warnings {
 			log.Println(warning)
 		}
 
 		// If we're in confirm mode and there were warnings, return with the warning
-		if len(cleanupWarnings) > 0 {
-			log.Println("Returning corruption warning to user")
-			return warningMsg{
-				warnings:  cleanupWarnings,
-				patch:     patch,
-				commitMsg: m.commitMsg.Value(),
-			}
+		log.Println("Returning corruption warning to user")
+		return warningMsg{
+			warnings:  result.Warnings,
+			patch:     result.Patch,
+			commitMsg: m.commitMsg.Value(),
 		}
 	}
 
-	// Apply the patch
+	// Apply the patch using the patch package
 	log.Println("Applying patch to git index")
-	applyCmd := exec.Command("git", "apply", "--index", "-")
-	applyCmd.Stdin = strings.NewReader(patch)
-
-	if output, err := applyCmd.CombinedOutput(); err != nil {
-		log.Printf("Error applying patch: %v\n%s", err, output)
-		return errMsg{fmt.Errorf("failed to apply patch: %w\n%s", err, output)}
+	if err := patch.Apply(result.Patch); err != nil {
+		log.Printf("Error applying patch: %v", err)
+		return errMsg{err}
 	}
 	log.Println("Patch applied successfully")
 
-	// Create the commit
+	// Create the commit using the patch package
 	log.Printf("Creating git commit with message: %s", m.commitMsg.Value())
+<<<<<<< Updated upstream:internal/tui/model/commit_composer.go
 	commitCmd := exec.Command("git", "commit", "-m", m.commitMsg.Value())
 	if output, err := commitCmd.CombinedOutput(); err != nil {
 		log.Printf("Error creating commit: %v\n%s", err, output)
@@ -408,6 +401,18 @@ func (m *CommitComposer) cleanupDiffForGit(c chunk.Chunk) (string, []string) {
 	diff = strings.ReplaceAll(diff, "\r\n", "\n")
 
 	return diff, warnings
+=======
+	output, err := patch.Commit(m.commitMsg.Value())
+	if err != nil {
+		log.Printf("Error creating commit: %v", err)
+		return errMsg{err}
+	}
+
+	// Success - return the git output
+	log.Println("Commit created successfully")
+	m.result = output
+	return successMsg{m.result}
+>>>>>>> Stashed changes:internal/tui/commit_composer.go
 }
 
 // errMsg represents an error message
@@ -567,11 +572,7 @@ func (m *CommitComposer) renderChunkListPanel() string {
 	m.listViewport.SetContent(strings.Join(items, "\n"))
 
 	// Ensure selected item is visible
-	if m.cursor < m.listViewport.YOffset {
-		m.listViewport.YOffset = m.cursor
-	} else if m.cursor >= m.listViewport.YOffset+m.listViewport.Height {
-		m.listViewport.YOffset = m.cursor - m.listViewport.Height + 1
-	}
+	shared.EnsureItemVisible(&m.listViewport, m.cursor)
 
 	listStyle := lipgloss.NewStyle().
 		Width(m.listWidth).
@@ -590,6 +591,7 @@ func (m *CommitComposer) renderDiffPanel() string {
 	}
 
 	c := m.chunks[m.cursor]
+<<<<<<< Updated upstream:internal/tui/model/commit_composer.go
 
 	// Create header with chunk info
 	fileLabel := tui.SubtleTextStyle.Render("File:")
@@ -611,6 +613,10 @@ func (m *CommitComposer) renderDiffPanel() string {
 		Padding(0, 1)
 
 	return diffStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, m.diffViewport.View()))
+=======
+	header := shared.RenderChunkHeader(c, SubtleTextStyle, TextStyle.Bold(true))
+	return shared.RenderDiffPanel(header, m.diffViewport.View(), m.diffWidth, m.height, ColorTitle)
+>>>>>>> Stashed changes:internal/tui/commit_composer.go
 }
 
 // updateDiffContent updates the diff viewport with the current chunk's diff
@@ -620,11 +626,12 @@ func (m *CommitComposer) updateDiffContent() {
 	}
 
 	c := m.chunks[m.cursor]
-	diffContent := m.formatDiff(c.Diff)
+	diffContent := chunk.FormatDiff(c.Diff)
 	m.diffViewport.SetContent(diffContent)
 	m.diffViewport.GotoTop()
 }
 
+<<<<<<< Updated upstream:internal/tui/model/commit_composer.go
 // formatDiff applies syntax highlighting to diff content (same as in DiffViewer)
 func (m *CommitComposer) formatDiff(diff string) string {
 	// Check if this is a binary file message
@@ -680,6 +687,8 @@ func (m *CommitComposer) formatDiff(diff string) string {
 	return strings.Join(formatted, "\n")
 }
 
+=======
+>>>>>>> Stashed changes:internal/tui/commit_composer.go
 // renderEditingView shows the commit message editing interface
 func (m *CommitComposer) renderEditingView() string {
 	title := tui.TitleStyle.Render("✏️  COMMIT MESSAGE")
@@ -770,28 +779,25 @@ func (m *CommitComposer) updateWarning(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *CommitComposer) applyPendingPatch() tea.Msg {
 	log.Println("Applying patch after warning confirmation")
 
-	// Apply the patch
-	applyCmd := exec.Command("git", "apply", "--cached", "-")
-	applyCmd.Stdin = strings.NewReader(m.pendingPatch)
-
-	if output, err := applyCmd.CombinedOutput(); err != nil {
-		log.Printf("Error applying patch: %v\n%s", err, output)
-		return errMsg{fmt.Errorf("failed to apply patch: %w\n%s", err, output)}
+	// Apply the patch using the patch package
+	if err := patch.Apply(m.pendingPatch); err != nil {
+		log.Printf("Error applying patch: %v", err)
+		return errMsg{err}
 	}
 	log.Println("Patch applied successfully")
 
-	// Create the commit
+	// Create the commit using the patch package
 	log.Printf("Creating git commit with message: %s", m.pendingCommitMsg)
-	commitCmd := exec.Command("git", "commit", "-m", m.pendingCommitMsg)
-	if output, err := commitCmd.CombinedOutput(); err != nil {
-		log.Printf("Error creating commit: %v\n%s", err, output)
-		return errMsg{fmt.Errorf("failed to create commit: %w\n%s", err, output)}
-	} else {
-		// Success - return the git output
-		log.Println("Commit created successfully")
-		m.result = string(output)
-		return successMsg{m.result}
+	output, err := patch.Commit(m.pendingCommitMsg)
+	if err != nil {
+		log.Printf("Error creating commit: %v", err)
+		return errMsg{err}
 	}
+
+	// Success - return the git output
+	log.Println("Commit created successfully")
+	m.result = output
+	return successMsg{m.result}
 }
 
 // renderConfirmationView shows the confirmation dialog

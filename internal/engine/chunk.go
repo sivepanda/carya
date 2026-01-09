@@ -31,13 +31,14 @@ func (e *SimpleEventEmitter) EmitChunkFlushed(chunks []chunk.Chunk) {
 
 // NewEngine creates a new Carya engine with SQLite storage at the specified path.
 // It initializes the chunk manager with a unified strategy and simple event emitter.
-func NewEngine(storePath string) (*Engine, error) {
+func NewEngine(storePath string, gitRoot string) (*Engine, error) {
 	chunkStore, err := store.NewSQLiteStore(storePath)
 	if err != nil {
 		return nil, err
 	}
 
 	strategy := chunk.NewUnifiedStrategy()
+	strategy.SetGitRoot(gitRoot)
 	emitter := &SimpleEventEmitter{}
 	manager := chunk.NewManager(strategy, chunkStore, emitter)
 

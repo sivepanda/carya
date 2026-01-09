@@ -31,6 +31,8 @@ Defines and handles actions taken after a pull or switching branches -- things s
 3. dependencies
 4. corrupted lines?
 
+5. Stashr - browse and view stashes, user or AI gen descriptions
+
 
 
 # HEY BIG NOTE THINGS ARE VERY BROKEN RN FIX PLSE

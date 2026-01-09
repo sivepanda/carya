@@ -27,7 +27,7 @@ func (ef *EngineFeature) Description() string {
 
 // Initialize sets up the engine
 func (ef *EngineFeature) Initialize(repo *repository.Repository) error {
-	eng, err := engine.NewEngine(repo.DBPath())
+	eng, err := engine.NewEngine(repo.DBPath(), repo.RootPath())
 	if err != nil {
 		return err
 	}

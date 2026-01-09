@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ type UnifiedStrategy struct {
 	mu           sync.RWMutex            // Protects concurrent access
 	activeChunks map[string]*activeChunk // Active chunks by file path
 	flushTimeout time.Duration           // Time before chunks are considered stale
+	gitRoot      string                  // Root directory of the git repository
 }
 
 // activeChunk tracks an in-progress chunk for a file.
@@ -39,6 +41,25 @@ func NewUnifiedStrategy() *UnifiedStrategy {
 	}
 }
 
+// SetGitRoot sets the git repository root directory for fetching initial file content.
+func (s *UnifiedStrategy) SetGitRoot(gitRoot string) {
+	s.gitRoot = gitRoot
+}
+
+// getGitFileContent retrieves the content of a file from git HEAD.
+func (s *UnifiedStrategy) getGitFileContent(filePath string) ([]byte, error) {
+	if s.gitRoot == "" {
+		return nil, fmt.Errorf("git root not set")
+	}
+	cmd := exec.Command("git", "show", "HEAD:"+filePath)
+	cmd.Dir = s.gitRoot
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	return output, nil
+}
+
 // OnFileChange processes a file change event, creating or updating chunks as needed.
 func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 	s.mu.Lock()
@@ -48,7 +69,16 @@ func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 
 	active, exists := s.activeChunks[event.Path]
 	if !exists {
-		// Create a copy of the content to avoid retention issues
+		// Try to get initial content from git HEAD
+		initialContent, err := s.getGitFileContent(event.Path)
+		if err != nil {
+			// If file doesn't exist in git, use empty content as initial
+			initialContent = []byte{}
+			log.Printf("File not in git HEAD, treating as new file: %s", event.Path)
+		}
+		initialHash := s.hashContent(initialContent)
+
+		// Create a copy of the current content
 		contentCopy := make([]byte, len(event.Contents))
 		copy(contentCopy, event.Contents)
 
@@ -62,8 +92,8 @@ func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 				Manual:    false,
 			},
 			lastUpdate:     event.Time,
-			initialHash:    contentHash,
-			initialContent: contentCopy,
+			initialHash:    initialHash,
+			initialContent: initialContent,
 			latestContent:  contentCopy,
 		}
 		log.Printf("Started tracking changes: %s", event.Path)

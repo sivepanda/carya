@@ -12,15 +12,16 @@ Carya uses a component-based structure. Each component was built to work well wi
 ### Feature-based commits
 Construct commits using dependency tracked "chunks" generated while you code and hit save. That means that if you forget to commit before making major changes to your code, it is easy as ever to revert to the latest working version!
 
+Use `carya compose` to interactively select and commit specific changes, or `carya view` to browse tracked chunks.
+
 ### Housekeeping
 Configure default commands to run following a pull or checkout -- no more having to remember to run the same 3 commands over and over!
+
+See [AUTODETECT.md](internal/housekeeping/AUTODETECT.md) to contribute package manager detection rules.
 
 
 
 ## Planned Components
-### Housekeeping (more stuff)
-Will automatically detect your stack and provide you templates of housekeeping commands to run.
-
 ### Asynchronous Team Tracking
 Utilizes your LSP to give you "windows" into the states of other active users' repositories, making it easier to ensure that you don't hit a merge conflict. (Of course, this feature really only works with small teams, as such **DANGER** this can be really messy for large teams. Don't say we didn't warn you!)
 

@@ -8,8 +8,15 @@ import (
 	"os"
 	"strings"
 
+<<<<<<< Updated upstream:internal/tui/model/housekeeping.go
+=======
+	"carya/internal/housekeeping"
+	"carya/internal/tui/shared"
+
+>>>>>>> Stashed changes:internal/tui/housekeeping_model.go
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -48,7 +55,12 @@ type PackageItem struct {
 // Housekeeping represents the Bubble Tea model for housekeeping setup
 type Housekeeping struct {
 	help              help.Model
+<<<<<<< Updated upstream:internal/tui/model/housekeeping.go
 	keys              tui.KeyMap
+=======
+	keys              KeyMap
+	spinner           spinner.Model
+>>>>>>> Stashed changes:internal/tui/housekeeping_model.go
 	state             int
 	cursor            int
 	detector          *housekeeping.Detector
@@ -99,7 +111,12 @@ func NewHousekeeping() Housekeeping {
 
 	m := Housekeeping{
 		help:     h,
+<<<<<<< Updated upstream:internal/tui/model/housekeeping.go
 		keys:     tui.DefaultKeys(),
+=======
+		keys:     DefaultKeys(),
+		spinner:  shared.NewDefaultSpinner(ColorAccent),
+>>>>>>> Stashed changes:internal/tui/housekeeping_model.go
 		state:    HKStateDetecting,
 		detector: detector,
 		width:    80,
@@ -114,8 +131,13 @@ func NewHousekeeping() Housekeeping {
 }
 
 // Init initializes the model
+<<<<<<< Updated upstream:internal/tui/model/housekeeping.go
 func (m Housekeeping) Init() tea.Cmd {
 	return m.detectPackages()
+=======
+func (m HousekeepingModel) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Tick, m.detectPackages())
+>>>>>>> Stashed changes:internal/tui/housekeeping_model.go
 }
 
 // ensureCaryaDirectory creates .carya directory and adds it to .gitignore if needed
@@ -288,7 +310,14 @@ type CommandsAddedMsg struct {
 }
 
 // Update handles messages and updates the model
+<<<<<<< Updated upstream:internal/tui/model/housekeeping.go
 func (m Housekeeping) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+=======
+func (m HousekeepingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	var cmds []tea.Cmd
+
+>>>>>>> Stashed changes:internal/tui/housekeeping_model.go
 	switch msg := msg.(type) {
 	case DetectionCompleteMsg:
 		if msg.Error != nil {
@@ -564,7 +593,13 @@ func (m Housekeeping) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	return m, nil
+	// Update spinner if we're in a loading state
+	if m.state == HKStateDetecting || m.state == HKStateExecute {
+		m.spinner, cmd = m.spinner.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+
+	return m, tea.Batch(cmds...)
 }
 
 // View renders the model
@@ -575,12 +610,16 @@ func (m Housekeeping) View() string {
 	case HKStateDetecting:
 		title := tui.TitleStyle.Render(tui.IconSettings + " HOUSEKEEPING SETUP")
 
+<<<<<<< Updated upstream:internal/tui/model/housekeeping.go
 		spinner := tui.SubtleTextStyle.Render(tui.IconSpinner)
 		detectingText := tui.TextStyle.Render("  Detecting package managers and build systems...")
+=======
+		detectingText := TextStyle.Render("Detecting package managers and build systems...")
+>>>>>>> Stashed changes:internal/tui/housekeeping_model.go
 
 		box := tui.BoxStyle.Width(60).Render(
 			lipgloss.JoinVertical(lipgloss.Left,
-				spinner+" "+detectingText,
+				m.spinner.View()+" "+detectingText,
 			),
 		)
 
@@ -769,12 +808,16 @@ func (m Housekeeping) View() string {
 	case HKStateExecute:
 		title := tui.TitleStyle.Render(tui.IconSettings + " PROCESSING")
 
+<<<<<<< Updated upstream:internal/tui/model/housekeeping.go
 		spinner := tui.SubtleTextStyle.Render(tui.IconSpinner)
 		executionText := tui.TextStyle.Render("  Adding selected commands to configuration...")
+=======
+		executionText := TextStyle.Render("Adding selected commands to configuration...")
+>>>>>>> Stashed changes:internal/tui/housekeeping_model.go
 
 		box := tui.BoxStyle.Width(60).Render(
 			lipgloss.JoinVertical(lipgloss.Left,
-				spinner+" "+executionText,
+				m.spinner.View()+" "+executionText,
 			),
 		)
 
