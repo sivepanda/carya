@@ -1,14 +1,10 @@
-package model
+package tui
 
 import (
 	"carya/internal/chunk"
 	"carya/internal/patch"
 	"carya/internal/store"
-<<<<<<< Updated upstream:internal/tui/model/commit_composer.go
-	"carya/internal/tui"
-=======
 	"carya/internal/tui/shared"
->>>>>>> Stashed changes:internal/tui/commit_composer.go
 	"fmt"
 	"log"
 	"path/filepath"
@@ -36,16 +32,10 @@ const (
 	StatusError
 )
 
-// ChunkStore interface for retrieving chunks
-type ChunkStore interface {
-	GetRecentChunks(limit int) ([]chunk.Chunk, error)
-	FindChunks(filePath string) ([]chunk.Chunk, error)
-}
-
-// CommitComposer represents the Bubble Tea model for selecting and committing diffs
-type CommitComposer struct {
+// CommitComposerModel represents the Bubble Tea model for selecting and committing diffs
+type CommitComposerModel struct {
 	help             help.Model
-	keys             tui.KeyMap
+	keys             KeyMap
 	chunks           []chunk.Chunk
 	selectedChunks   map[int]bool
 	cursor           int
@@ -67,19 +57,19 @@ type CommitComposer struct {
 	pendingCommitMsg string   // Store commit message for applying after confirmation
 }
 
-// NewCommitComposer creates a new commit composer model
-func NewCommitComposer(store ChunkStore) (*CommitComposer, error) {
+// NewCommitComposerModel creates a new commit composer model
+func NewCommitComposerModel(store ChunkStore) (*CommitComposerModel, error) {
 	log.Println("Initializing commit composer")
 	h := help.New()
-	h.Styles.ShortDesc = tui.HelpDescStyle
-	h.Styles.ShortKey = tui.HelpKeyStyle
-	h.Styles.FullDesc = tui.HelpDescStyle
-	h.Styles.FullKey = tui.HelpKeyStyle
+	h.Styles.ShortDesc = HelpDescStyle
+	h.Styles.ShortKey = HelpKeyStyle
+	h.Styles.FullDesc = HelpDescStyle
+	h.Styles.FullKey = HelpKeyStyle
 
 	// Initialize spinner
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(tui.ColorAccent)
+	s.Style = lipgloss.NewStyle().Foreground(ColorAccent)
 
 	// Load recent chunks
 	log.Println("Loading recent chunks for commit composition")
@@ -97,9 +87,9 @@ func NewCommitComposer(store ChunkStore) (*CommitComposer, error) {
 	ti.Width = 60
 	ti.Prompt = ""
 
-	m := &CommitComposer{
+	m := &CommitComposerModel{
 		help:           h,
-		keys:           tui.DefaultKeys(),
+		keys:           DefaultKeys(),
 		chunks:         chunks,
 		selectedChunks: make(map[int]bool),
 		cursor:         0,
@@ -115,12 +105,12 @@ func NewCommitComposer(store ChunkStore) (*CommitComposer, error) {
 }
 
 // Init initializes the model
-func (m *CommitComposer) Init() tea.Cmd {
+func (m *CommitComposerModel) Init() tea.Cmd {
 	return m.spinner.Tick
 }
 
 // Update handles messages and updates the model
-func (m *CommitComposer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *CommitComposerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle success/error messages from commit process
 	switch msg := msg.(type) {
 	case errMsg:
@@ -169,7 +159,7 @@ func (m *CommitComposer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateSelecting handles the chunk selection state
-func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *CommitComposerModel) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -238,7 +228,7 @@ func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateEditing handles the commit message editing state
-func (m *CommitComposer) updateEditing(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *CommitComposerModel) updateEditing(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -268,7 +258,7 @@ func (m *CommitComposer) updateEditing(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateConfirming handles the confirmation state
-func (m *CommitComposer) updateConfirming(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *CommitComposerModel) updateConfirming(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -289,7 +279,7 @@ func (m *CommitComposer) updateConfirming(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // createCommit performs the git operations to create a commit from selected diffs
-func (m *CommitComposer) createCommit() tea.Msg {
+func (m *CommitComposerModel) createCommit() tea.Msg {
 	log.Println("Creating commit from selected diffs")
 
 	// Create a patch from the selected diffs using the patch package
@@ -332,76 +322,6 @@ func (m *CommitComposer) createCommit() tea.Msg {
 
 	// Create the commit using the patch package
 	log.Printf("Creating git commit with message: %s", m.commitMsg.Value())
-<<<<<<< Updated upstream:internal/tui/model/commit_composer.go
-	commitCmd := exec.Command("git", "commit", "-m", m.commitMsg.Value())
-	if output, err := commitCmd.CombinedOutput(); err != nil {
-		log.Printf("Error creating commit: %v\n%s", err, output)
-		return errMsg{fmt.Errorf("failed to create commit: %w\n%s", err, output)}
-	} else {
-		// Success - return the git output
-		log.Println("Commit created successfully")
-		m.result = string(output)
-		return successMsg{m.result}
-	}
-}
-
-// createPatchFromSelectedDiffs combines all selected diffs into a single patch
-func (m *CommitComposer) createPatchFromSelectedDiffs() (string, []string) {
-	log.Println("Combining selected diffs into a unified patch")
-	var patches []string
-	var warnings []string
-
-	for i, chunk := range m.chunks {
-		if selected, ok := m.selectedChunks[i]; ok && selected {
-			log.Printf("Adding diff for file: %s to patch", chunk.FilePath)
-			// Clean up the diff to make it applicable by git
-			cleanDiff, diffWarnings := m.cleanupDiffForGit(chunk)
-			if len(diffWarnings) > 0 {
-				for _, w := range diffWarnings {
-					warnings = append(warnings, fmt.Sprintf("%s: %s", chunk.FilePath, w))
-				}
-			}
-			if cleanDiff != "" {
-				patches = append(patches, cleanDiff)
-			}
-		}
-	}
-
-	if len(patches) == 0 {
-		return "", warnings
-	}
-	return strings.Join(patches, ""), warnings
-}
-
-// cleanupDiffForGit prepares a diff for use with git apply
-func (m *CommitComposer) cleanupDiffForGit(c chunk.Chunk) (string, []string) {
-	diff := c.Diff
-	var warnings []string
-
-	// Skip binary files
-	if strings.HasPrefix(diff, "Binary file ") {
-		log.Printf("Skipping binary file: %s", c.FilePath)
-		return "", nil
-	}
-
-	// Ensure the diff ends with a newline for proper git apply
-	if !strings.HasSuffix(diff, "\n") {
-		diff = diff + "\n"
-	}
-
-	// Check for null bytes which would corrupt the patch
-	if strings.Contains(diff, "\x00") {
-		warning := "Diff contains null bytes (file may be binary)"
-		log.Printf("Warning: %s for file %s", warning, c.FilePath)
-		warnings = append(warnings, warning)
-		return "", warnings
-	}
-
-	// Normalize line endings
-	diff = strings.ReplaceAll(diff, "\r\n", "\n")
-
-	return diff, warnings
-=======
 	output, err := patch.Commit(m.commitMsg.Value())
 	if err != nil {
 		log.Printf("Error creating commit: %v", err)
@@ -412,7 +332,6 @@ func (m *CommitComposer) cleanupDiffForGit(c chunk.Chunk) (string, []string) {
 	log.Println("Commit created successfully")
 	m.result = output
 	return successMsg{m.result}
->>>>>>> Stashed changes:internal/tui/commit_composer.go
 }
 
 // errMsg represents an error message
@@ -435,26 +354,26 @@ type successMsg struct {
 }
 
 // View renders the model
-func (m *CommitComposer) View() string {
+func (m *CommitComposerModel) View() string {
 	if m.err != nil {
-		title := tui.ErrorStyle.Render("✗ ERROR")
-		errorMsg := tui.ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
+		title := ErrorStyle.Render("✗ ERROR")
+		errorMsg := ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
 
 		errorBox := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(tui.ColorError).
+			BorderForeground(ColorError).
 			Padding(1, 2).
 			Width(60).
 			Render(errorMsg)
 
-		instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("q quit")
+		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("q quit")
 		return lipgloss.JoinVertical(lipgloss.Center, title, "", errorBox, instructions)
 	}
 
 	if !m.ready {
-		title := tui.TitleStyle.Render("📋 LOADING CHUNKS")
+		title := TitleStyle.Render("📋 LOADING CHUNKS")
 		spinnerView := m.spinner.View()
-		loadingText := tui.TextStyle.Render(" Loading chunks...")
+		loadingText := TextStyle.Render(" Loading chunks...")
 
 		loadingContent := lipgloss.JoinVertical(lipgloss.Center,
 			title,
@@ -485,17 +404,17 @@ func (m *CommitComposer) View() string {
 }
 
 // renderSelectionView shows the chunk selection interface
-func (m *CommitComposer) renderSelectionView() string {
+func (m *CommitComposerModel) renderSelectionView() string {
 	if len(m.chunks) == 0 {
-		title := tui.TitleStyle.Render("📋 COMMIT COMPOSER")
-		emptyMsg := tui.SubtleTextStyle.Render("No chunks found")
-		helpMsg := tui.TextStyle.Render("Start making changes to see them here!")
+		title := TitleStyle.Render("📋 COMMIT COMPOSER")
+		emptyMsg := SubtleTextStyle.Render("No chunks found")
+		helpMsg := TextStyle.Render("Start making changes to see them here!")
 
-		emptyBox := tui.DimBoxStyle.Width(50).Align(lipgloss.Center).Render(
+		emptyBox := DimBoxStyle.Width(50).Align(lipgloss.Center).Render(
 			lipgloss.JoinVertical(lipgloss.Center, emptyMsg, "", helpMsg),
 		)
 
-		instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("q quit")
+		instructions := HelpDescStyle.Margin(1, 0, 0, 0).Render("q quit")
 
 		content := lipgloss.JoinVertical(lipgloss.Center, title, "", emptyBox, instructions)
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
@@ -516,14 +435,14 @@ func (m *CommitComposer) renderSelectionView() string {
 		}
 	}
 
-	navHelp := tui.HelpKeyStyle.Render("↑/↓") + tui.HelpDescStyle.Render(" navigate")
-	selectHelp := tui.HelpKeyStyle.Render("space") + tui.HelpDescStyle.Render(" select")
-	continueHelp := tui.HelpKeyStyle.Render("enter") + tui.HelpDescStyle.Render(" continue")
-	quitHelp := tui.HelpKeyStyle.Render("q") + tui.HelpDescStyle.Render(" quit")
+	navHelp := HelpKeyStyle.Render("↑/↓") + HelpDescStyle.Render(" navigate")
+	selectHelp := HelpKeyStyle.Render("space") + HelpDescStyle.Render(" select")
+	continueHelp := HelpKeyStyle.Render("enter") + HelpDescStyle.Render(" continue")
+	quitHelp := HelpKeyStyle.Render("q") + HelpDescStyle.Render(" quit")
 
 	selectedInfo := ""
 	if selectedCount > 0 {
-		selectedInfo = tui.SuccessStyle.Render(fmt.Sprintf(" • %d selected", selectedCount))
+		selectedInfo = SuccessStyle.Render(fmt.Sprintf(" • %d selected", selectedCount))
 	}
 
 	footer := lipgloss.NewStyle().
@@ -534,8 +453,8 @@ func (m *CommitComposer) renderSelectionView() string {
 }
 
 // renderChunkListPanel renders the left panel with selectable chunk list
-func (m *CommitComposer) renderChunkListPanel() string {
-	title := tui.HeaderStyle.Padding(1, 2).Render("📋 SELECT DIFFS")
+func (m *CommitComposerModel) renderChunkListPanel() string {
+	title := HeaderStyle.Padding(1, 2).Render("📋 SELECT DIFFS")
 
 	var items []string
 	for i, c := range m.chunks {
@@ -557,14 +476,14 @@ func (m *CommitComposer) renderChunkListPanel() string {
 		}
 
 		// Format time
-		timeStr := tui.SubtleTextStyle.Render(c.StartTime.Format("15:04"))
+		timeStr := SubtleTextStyle.Render(c.StartTime.Format("15:04"))
 
 		line := cursor + checkBox + filename + " " + timeStr
 
 		if m.cursor == i {
-			line = tui.SelectedItemStyle.Render(line)
+			line = SelectedItemStyle.Render(line)
 		} else {
-			line = tui.ItemStyle.Render(line)
+			line = ItemStyle.Render(line)
 		}
 		items = append(items, line)
 	}
@@ -578,49 +497,25 @@ func (m *CommitComposer) renderChunkListPanel() string {
 		Width(m.listWidth).
 		Height(m.height).
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(tui.ColorBorder).
+		BorderForeground(ColorBorder).
 		Padding(0, 1)
 
 	return listStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, m.listViewport.View()))
 }
 
 // renderDiffPanel renders the right panel with diff content
-func (m *CommitComposer) renderDiffPanel() string {
+func (m *CommitComposerModel) renderDiffPanel() string {
 	if m.cursor >= len(m.chunks) {
 		return ""
 	}
 
 	c := m.chunks[m.cursor]
-<<<<<<< Updated upstream:internal/tui/model/commit_composer.go
-
-	// Create header with chunk info
-	fileLabel := tui.SubtleTextStyle.Render("File:")
-	filePath := tui.TextStyle.Bold(true).Render(c.FilePath)
-	timeLabel := tui.SubtleTextStyle.Render("Time:")
-	timeRange := tui.TextStyle.Render(fmt.Sprintf("%s → %s",
-		c.StartTime.Format("15:04:05"),
-		c.EndTime.Format("15:04:05")))
-
-	header := lipgloss.NewStyle().
-		Padding(1, 2).
-		Render(fileLabel + " " + filePath + "  " + timeLabel + " " + timeRange)
-
-	diffStyle := lipgloss.NewStyle().
-		Width(m.diffWidth).
-		Height(m.height).
-		BorderStyle(lipgloss.ThickBorder()).
-		BorderForeground(tui.ColorTitle).
-		Padding(0, 1)
-
-	return diffStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, m.diffViewport.View()))
-=======
 	header := shared.RenderChunkHeader(c, SubtleTextStyle, TextStyle.Bold(true))
 	return shared.RenderDiffPanel(header, m.diffViewport.View(), m.diffWidth, m.height, ColorTitle)
->>>>>>> Stashed changes:internal/tui/commit_composer.go
 }
 
 // updateDiffContent updates the diff viewport with the current chunk's diff
-func (m *CommitComposer) updateDiffContent() {
+func (m *CommitComposerModel) updateDiffContent() {
 	if m.cursor >= len(m.chunks) || !m.ready {
 		return
 	}
@@ -631,67 +526,9 @@ func (m *CommitComposer) updateDiffContent() {
 	m.diffViewport.GotoTop()
 }
 
-<<<<<<< Updated upstream:internal/tui/model/commit_composer.go
-// formatDiff applies syntax highlighting to diff content (same as in DiffViewer)
-func (m *CommitComposer) formatDiff(diff string) string {
-	// Check if this is a binary file message
-	if strings.HasPrefix(diff, "Binary file ") {
-		binaryStyle := lipgloss.NewStyle().
-			Foreground(tui.ColorWarning).
-			Bold(true)
-		infoStyle := lipgloss.NewStyle().
-			Foreground(tui.ColorTertiary)
-
-		lines := strings.Split(diff, "\n")
-		var formatted []string
-		for i, line := range lines {
-			if i == 0 {
-				formatted = append(formatted, binaryStyle.Render("⚠ "+line))
-			} else if strings.TrimSpace(line) != "" {
-				formatted = append(formatted, infoStyle.Render("  "+line))
-			}
-		}
-		return strings.Join(formatted, "\n")
-	}
-
-	lines := strings.Split(diff, "\n")
-	var formatted []string
-
-	// Style definitions for diff lines - using our color palette
-	addedStyle := lipgloss.NewStyle().Foreground(tui.ColorSuccess).Bold(false)
-	removedStyle := lipgloss.NewStyle().Foreground(tui.ColorError).Bold(false)
-	contextStyle := lipgloss.NewStyle().Foreground(tui.ColorTertiary)
-	headerStyle := lipgloss.NewStyle().Foreground(tui.ColorAccent).Bold(true)
-	rangeStyle := lipgloss.NewStyle().Foreground(tui.ColorWarning).Bold(true)
-
-	for _, line := range lines {
-		switch {
-		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
-			// File headers in diff
-			formatted = append(formatted, headerStyle.Render(line))
-		case strings.HasPrefix(line, "+"):
-			formatted = append(formatted, addedStyle.Render(line))
-		case strings.HasPrefix(line, "-"):
-			formatted = append(formatted, removedStyle.Render(line))
-		case strings.HasPrefix(line, "@@"):
-			formatted = append(formatted, rangeStyle.Render(line))
-		case strings.HasPrefix(line, "diff --git") || strings.HasPrefix(line, "index"):
-			formatted = append(formatted, tui.SubtleTextStyle.Render(line))
-		case strings.HasPrefix(line, "File:") || strings.HasPrefix(line, "Time:") || strings.HasPrefix(line, "Hash:"):
-			formatted = append(formatted, contextStyle.Render(line))
-		default:
-			formatted = append(formatted, tui.TextStyle.Render(line))
-		}
-	}
-
-	return strings.Join(formatted, "\n")
-}
-
-=======
->>>>>>> Stashed changes:internal/tui/commit_composer.go
 // renderEditingView shows the commit message editing interface
-func (m *CommitComposer) renderEditingView() string {
-	title := tui.TitleStyle.Render("✏️  COMMIT MESSAGE")
+func (m *CommitComposerModel) renderEditingView() string {
+	title := TitleStyle.Render("✏️  COMMIT MESSAGE")
 
 	// Count selected chunks
 	selectedCount := 0
@@ -713,25 +550,25 @@ func (m *CommitComposer) renderEditingView() string {
 		}
 	}
 
-	filesHeader := tui.SubheaderStyle.Render(fmt.Sprintf("SELECTED FILES (%d):", selectedCount))
-	filesContent := tui.SubtleTextStyle.Render(strings.Join(selectedFiles, "\n"))
+	filesHeader := SubheaderStyle.Render(fmt.Sprintf("SELECTED FILES (%d):", selectedCount))
+	filesContent := SubtleTextStyle.Render(strings.Join(selectedFiles, "\n"))
 
 	// Input field
-	inputHeader := tui.SubheaderStyle.Render("COMMIT MESSAGE:")
+	inputHeader := SubheaderStyle.Render("COMMIT MESSAGE:")
 
 	// Style the input
 	inputStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(tui.ColorBorder).
+		BorderForeground(ColorBorder).
 		Padding(1, 2).
 		Width(60)
 
 	inputBox := inputStyle.Render(m.commitMsg.View())
 
 	// Instructions
-	escHelp := tui.HelpKeyStyle.Render("esc") + tui.HelpDescStyle.Render(" back")
-	enterHelp := tui.HelpKeyStyle.Render("enter") + tui.HelpDescStyle.Render(" continue")
-	quitHelp := tui.HelpKeyStyle.Render("q") + tui.HelpDescStyle.Render(" quit")
+	escHelp := HelpKeyStyle.Render("esc") + HelpDescStyle.Render(" back")
+	enterHelp := HelpKeyStyle.Render("enter") + HelpDescStyle.Render(" continue")
+	quitHelp := HelpKeyStyle.Render("q") + HelpDescStyle.Render(" quit")
 
 	footer := lipgloss.NewStyle().
 		Padding(1, 1).
@@ -754,7 +591,7 @@ func (m *CommitComposer) renderEditingView() string {
 }
 
 // updateWarning handles the warning confirmation state
-func (m *CommitComposer) updateWarning(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *CommitComposerModel) updateWarning(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
 		case "y", "Y":
@@ -776,7 +613,7 @@ func (m *CommitComposer) updateWarning(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // applyPendingPatch applies the previously generated patch after warning confirmation
-func (m *CommitComposer) applyPendingPatch() tea.Msg {
+func (m *CommitComposerModel) applyPendingPatch() tea.Msg {
 	log.Println("Applying patch after warning confirmation")
 
 	// Apply the patch using the patch package
@@ -801,8 +638,8 @@ func (m *CommitComposer) applyPendingPatch() tea.Msg {
 }
 
 // renderConfirmationView shows the confirmation dialog
-func (m *CommitComposer) renderConfirmationView() string {
-	title := tui.TitleStyle.Render("❓ CONFIRM COMMIT")
+func (m *CommitComposerModel) renderConfirmationView() string {
+	title := TitleStyle.Render("❓ CONFIRM COMMIT")
 
 	// Count selected chunks
 	selectedCount := 0
@@ -817,28 +654,28 @@ func (m *CommitComposer) renderConfirmationView() string {
 	// Style the confirmation box
 	confirmStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(tui.ColorWarning).
+		BorderForeground(ColorWarning).
 		Padding(1, 2).
 		Width(60)
 
 	// Format the commit message
-	commitMsg := tui.TextStyle.Bold(true).Render("\"" + m.commitMsg.Value() + "\"")
+	commitMsg := TextStyle.Bold(true).Render("\"" + m.commitMsg.Value() + "\"")
 
 	confirmBox := confirmStyle.Render(
 		lipgloss.JoinVertical(
 			lipgloss.Center,
-			tui.SubtleTextStyle.Render(message),
+			SubtleTextStyle.Render(message),
 			"",
 			commitMsg,
 			"",
-			tui.TextStyle.Render("Are you sure? (y/n)"),
+			TextStyle.Render("Are you sure? (y/n)"),
 		),
 	)
 
 	// Instructions
-	yesHelp := tui.HelpKeyStyle.Render("y") + tui.HelpDescStyle.Render(" yes")
-	noHelp := tui.HelpKeyStyle.Render("n") + tui.HelpDescStyle.Render(" no")
-	quitHelp := tui.HelpKeyStyle.Render("q") + tui.HelpDescStyle.Render(" quit")
+	yesHelp := HelpKeyStyle.Render("y") + HelpDescStyle.Render(" yes")
+	noHelp := HelpKeyStyle.Render("n") + HelpDescStyle.Render(" no")
+	quitHelp := HelpKeyStyle.Render("q") + HelpDescStyle.Render(" quit")
 
 	footer := lipgloss.NewStyle().
 		Padding(1, 1).
@@ -857,8 +694,8 @@ func (m *CommitComposer) renderConfirmationView() string {
 }
 
 // renderWarningView shows the warning confirmation dialog
-func (m *CommitComposer) renderWarningView() string {
-	title := tui.WarningStyle.Render("⚠ CORRUPT CONTENT DETECTED")
+func (m *CommitComposerModel) renderWarningView() string {
+	title := WarningStyle.Render("⚠ CORRUPT CONTENT DETECTED")
 
 	// Format the warnings for display
 	var warningLines []string
@@ -871,15 +708,15 @@ func (m *CommitComposer) renderWarningView() string {
 		}
 	}
 
-	warningText := tui.SubtleTextStyle.Render(strings.Join(warningLines, "\n"))
+	warningText := SubtleTextStyle.Render(strings.Join(warningLines, "\n"))
 
-	message := tui.TextStyle.Render("Corrupt or invalid content was detected and cleaned from the diff.")
-	question := tui.TextStyle.Bold(true).Render("Proceed with the cleaned version?")
+	message := TextStyle.Render("Corrupt or invalid content was detected and cleaned from the diff.")
+	question := TextStyle.Bold(true).Render("Proceed with the cleaned version?")
 
 	// Style the warning box
 	warningStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(tui.ColorWarning).
+		BorderForeground(ColorWarning).
 		Padding(1, 2).
 		Width(70)
 
@@ -892,14 +729,14 @@ func (m *CommitComposer) renderWarningView() string {
 			"",
 			question,
 			"",
-			tui.TextStyle.Render("Press (y) to proceed or (n) to cancel"),
+			TextStyle.Render("Press (y) to proceed or (n) to cancel"),
 		),
 	)
 
 	// Instructions
-	yesHelp := tui.HelpKeyStyle.Render("y") + tui.HelpDescStyle.Render(" proceed")
-	noHelp := tui.HelpKeyStyle.Render("n") + tui.HelpDescStyle.Render(" cancel")
-	quitHelp := tui.HelpKeyStyle.Render("q") + tui.HelpDescStyle.Render(" quit")
+	yesHelp := HelpKeyStyle.Render("y") + HelpDescStyle.Render(" proceed")
+	noHelp := HelpKeyStyle.Render("n") + HelpDescStyle.Render(" cancel")
+	quitHelp := HelpKeyStyle.Render("q") + HelpDescStyle.Render(" quit")
 
 	footer := lipgloss.NewStyle().
 		Padding(1, 1).
@@ -918,11 +755,11 @@ func (m *CommitComposer) renderWarningView() string {
 }
 
 // renderCommittingView shows the commit in progress view
-func (m *CommitComposer) renderCommittingView() string {
-	title := tui.TitleStyle.Render("⏳ CREATING COMMIT")
+func (m *CommitComposerModel) renderCommittingView() string {
+	title := TitleStyle.Render("⏳ CREATING COMMIT")
 
 	spinnerView := m.spinner.View()
-	loadingText := tui.TextStyle.Render(" Creating commit, please wait...")
+	loadingText := TextStyle.Render(" Creating commit, please wait...")
 
 	return lipgloss.Place(
 		m.width,
@@ -938,36 +775,36 @@ func (m *CommitComposer) renderCommittingView() string {
 }
 
 // renderDoneView shows the success view
-func (m *CommitComposer) renderDoneView() string {
-	title := tui.SuccessStyle.Render("✓ COMMIT CREATED")
+func (m *CommitComposerModel) renderDoneView() string {
+	title := SuccessStyle.Render("✓ COMMIT CREATED")
 
 	resultStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(tui.ColorSuccess).
+		BorderForeground(ColorSuccess).
 		Padding(1, 2).
 		Width(60)
 
 	resultBox := resultStyle.Render(m.result)
 
-	footer := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("Press Enter or q to quit")
+	footer := HelpDescStyle.Margin(1, 0, 0, 0).Render("Press Enter or q to quit")
 
 	content := lipgloss.JoinVertical(lipgloss.Center, title, "", resultBox, "", footer)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
 // renderErrorView shows the error view
-func (m *CommitComposer) renderErrorView() string {
-	title := tui.ErrorStyle.Render("✗ ERROR")
-	errorMsg := tui.TextStyle.Render(m.err.Error())
+func (m *CommitComposerModel) renderErrorView() string {
+	title := ErrorStyle.Render("✗ ERROR")
+	errorMsg := TextStyle.Render(m.err.Error())
 
 	errorBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(tui.ColorError).
+		BorderForeground(ColorError).
 		Padding(1, 2).
 		Width(60).
 		Render(errorMsg)
 
-	footer := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("Press Enter or q to quit")
+	footer := HelpDescStyle.Margin(1, 0, 0, 0).Render("Press Enter or q to quit")
 
 	content := lipgloss.JoinVertical(lipgloss.Center, title, "", errorBox, "", footer)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
@@ -984,7 +821,7 @@ func RunCommitComposer(dataSourceName string) error {
 	log.Println("Successfully opened chunk store")
 	defer store.Close()
 
-	model, err := NewCommitComposer(store)
+	model, err := NewCommitComposerModel(store)
 	if err != nil {
 		log.Printf("Error creating commit composer model: %v", err)
 		return err
