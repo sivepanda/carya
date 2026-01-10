@@ -22,9 +22,6 @@ See [AUTODETECT.md](internal/housekeeping/AUTODETECT.md) to contribute package m
 
 
 ## Planned Components
-### Housekeeping (more stuff)
-Will automatically detect your stack and provide you templates of housekeeping commands to run.
-
 ### Asynchronous Team Tracking
 Utilizes your LSP to give you "windows" into the states of other active users' repositories, making it easier to ensure that you don't hit a merge conflict. (Of course, this feature really only works with small teams, as such **DANGER** this can be really messy for large teams. Don't say we didn't warn you!)
 
