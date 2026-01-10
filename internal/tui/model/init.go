@@ -2,12 +2,14 @@ package model
 
 import (
 	"carya/internal/tui"
+	"carya/internal/tui/shared"
 	"fmt"
 
 	initializer "carya/internal/init"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -37,6 +39,7 @@ var availableFeatures = []Feature{
 type Init struct {
 	help               help.Model
 	keys               tui.KeyMap
+	spinner            spinner.Model
 	state              int
 	cursor             int
 	selectedFeatures   map[string]bool
@@ -59,6 +62,7 @@ func NewInit() Init {
 	m := Init{
 		help:             h,
 		keys:             tui.DefaultKeys(),
+		spinner:          shared.NewDefaultSpinner(tui.ColorAccent),
 		state:            StateWelcome,
 		width:            80,
 		selectedFeatures: make(map[string]bool),
@@ -79,21 +83,6 @@ func (m *Init) handleFormSubmission() tea.Cmd {
 		// Get the selected features from the model
 		selectedFeatures := m.getSelectedFeatures()
 
-		// Special case: If ONLY housekeeping is selected, launch the housekeeping TUI
-		if len(selectedFeatures) == 1 && selectedFeatures[0] == "housekeep" {
-			// Create .carya directory first
-			init, err := initializer.NewInitializer([]string{})
-			if err != nil {
-				return FormSubmittedMsg{Error: err, LaunchHousekeeping: false}
-			}
-
-			if err := init.Initialize(); err != nil {
-				return FormSubmittedMsg{Error: err, LaunchHousekeeping: false}
-			}
-
-			return FormSubmittedMsg{Error: nil, LaunchHousekeeping: true}
-		}
-
 		// Create initializer with selected features
 		init, err := initializer.NewInitializer(selectedFeatures)
 		if err != nil {
@@ -105,7 +94,8 @@ func (m *Init) handleFormSubmission() tea.Cmd {
 			return FormSubmittedMsg{Error: err, LaunchHousekeeping: false}
 		}
 
-		return FormSubmittedMsg{Error: nil, LaunchHousekeeping: false}
+		// Launch housekeeping TUI if housekeeping is enabled
+		return FormSubmittedMsg{Error: nil, LaunchHousekeeping: m.IsFeatureEnabled("housekeep")}
 	}
 }
 
@@ -127,6 +117,8 @@ func (m *Init) IsFeatureEnabled(featureKey string) bool {
 
 // Update handles messages and updates the model
 func (m *Init) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case FormSubmittedMsg:
 		if msg.Error != nil {
@@ -188,7 +180,7 @@ func (m *Init) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case StateConfirm:
 				if m.confirmSelection {
 					m.state = StateExecute
-					return m, m.handleFormSubmission()
+					return m, tea.Batch(m.spinner.Tick, m.handleFormSubmission())
 				} else {
 					// User said No, go back to feature selection
 					m.state = StateFeatureSelect
@@ -203,6 +195,12 @@ func (m *Init) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 		}
+	}
+
+	// Update spinner when in execute state
+	if m.state == StateExecute {
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -330,10 +328,8 @@ func (m *Init) View() string {
 		selected := m.getSelectedFeatures()
 		var summaryLines []string
 
-		spinner := tui.SubtleTextStyle.Render("◐")
-
 		if len(selected) == 0 {
-			summaryLines = append(summaryLines, spinner+" "+tui.TextStyle.Render("Initializing basic Carya configuration..."))
+			summaryLines = append(summaryLines, m.spinner.View()+" "+tui.TextStyle.Render("Initializing basic Carya configuration..."))
 		} else {
 			for _, featureKey := range selected {
 				for _, feature := range availableFeatures {
@@ -344,7 +340,7 @@ func (m *Init) View() string {
 				}
 			}
 			summaryLines = append(summaryLines, "")
-			summaryLines = append(summaryLines, spinner+" "+tui.TextStyle.Render("Setting up your repository..."))
+			summaryLines = append(summaryLines, m.spinner.View()+" "+tui.TextStyle.Render("Setting up your repository..."))
 		}
 
 		processingBox := tui.BoxStyle.Width(60).Render(

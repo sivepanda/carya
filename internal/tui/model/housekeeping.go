@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"carya/internal/housekeeping"
 	"carya/internal/tui"
+	"carya/internal/tui/shared"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -49,6 +51,7 @@ type PackageItem struct {
 type Housekeeping struct {
 	help              help.Model
 	keys              tui.KeyMap
+	spinner           spinner.Model
 	state             int
 	cursor            int
 	detector          *housekeeping.Detector
@@ -100,6 +103,7 @@ func NewHousekeeping() Housekeeping {
 	m := Housekeeping{
 		help:     h,
 		keys:     tui.DefaultKeys(),
+		spinner:  shared.NewDefaultSpinner(tui.ColorAccent),
 		state:    HKStateDetecting,
 		detector: detector,
 		width:    80,
@@ -115,7 +119,7 @@ func NewHousekeeping() Housekeeping {
 
 // Init initializes the model
 func (m Housekeeping) Init() tea.Cmd {
-	return m.detectPackages()
+	return tea.Batch(m.spinner.Tick, m.detectPackages())
 }
 
 // ensureCaryaDirectory creates .carya directory and adds it to .gitignore if needed
@@ -289,6 +293,8 @@ type CommandsAddedMsg struct {
 
 // Update handles messages and updates the model
 func (m Housekeeping) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case DetectionCompleteMsg:
 		if msg.Error != nil {
@@ -556,12 +562,18 @@ func (m Housekeeping) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case HKStateConfirm:
 				m.state = HKStateExecute
-				return m, m.addSelectedCommands()
+				return m, tea.Batch(m.spinner.Tick, m.addSelectedCommands())
 
 			case HKStateComplete:
 				return m, tea.Quit
 			}
 		}
+	}
+
+	// Update spinner when in detecting or execute state
+	if m.state == HKStateDetecting || m.state == HKStateExecute {
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -575,12 +587,11 @@ func (m Housekeeping) View() string {
 	case HKStateDetecting:
 		title := tui.TitleStyle.Render(tui.IconSettings + " HOUSEKEEPING SETUP")
 
-		spinner := tui.SubtleTextStyle.Render(tui.IconSpinner)
-		detectingText := tui.TextStyle.Render("  Detecting package managers and build systems...")
+		detectingText := tui.TextStyle.Render("Detecting package managers and build systems...")
 
 		box := tui.BoxStyle.Width(60).Render(
 			lipgloss.JoinVertical(lipgloss.Left,
-				spinner+" "+detectingText,
+				m.spinner.View()+" "+detectingText,
 			),
 		)
 
@@ -769,12 +780,11 @@ func (m Housekeeping) View() string {
 	case HKStateExecute:
 		title := tui.TitleStyle.Render(tui.IconSettings + " PROCESSING")
 
-		spinner := tui.SubtleTextStyle.Render(tui.IconSpinner)
-		executionText := tui.TextStyle.Render("  Adding selected commands to configuration...")
+		executionText := tui.TextStyle.Render("Adding selected commands to configuration...")
 
 		box := tui.BoxStyle.Width(60).Render(
 			lipgloss.JoinVertical(lipgloss.Left,
-				spinner+" "+executionText,
+				m.spinner.View()+" "+executionText,
 			),
 		)
 
