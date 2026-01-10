@@ -12,8 +12,12 @@ Carya uses a component-based structure. Each component was built to work well wi
 ### Feature-based commits
 Construct commits using dependency tracked "chunks" generated while you code and hit save. That means that if you forget to commit before making major changes to your code, it is easy as ever to revert to the latest working version!
 
+Use `carya compose` to interactively select and commit specific changes, or `carya view` to browse tracked chunks.
+
 ### Housekeeping
 Configure default commands to run following a pull or checkout -- no more having to remember to run the same 3 commands over and over!
+
+See [AUTODETECT.md](internal/housekeeping/AUTODETECT.md) to contribute package manager detection rules.
 
 
 

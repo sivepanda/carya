@@ -2,11 +2,12 @@ package model
 
 import (
 	"carya/internal/chunk"
+	"carya/internal/patch"
 	"carya/internal/store"
 	"carya/internal/tui"
+	"carya/internal/tui/shared"
 	"fmt"
 	"log"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -172,23 +173,16 @@ func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// Split width: 40% for list, 60% for diff
-		m.listWidth = int(float64(msg.Width) * 0.4)
-		m.diffWidth = msg.Width - m.listWidth
-
-		headerHeight := 2
-		footerHeight := 3
-		contentHeight := msg.Height - headerHeight - footerHeight
+		// Calculate split view layout
+		layout := shared.CalculateSplitViewLayout(msg.Width, msg.Height, 2, 3)
+		m.listWidth = layout.ListWidth
+		m.diffWidth = layout.DiffWidth
 
 		if !m.ready {
-			m.listViewport = viewport.New(m.listWidth-2, contentHeight)
-			m.diffViewport = viewport.New(m.diffWidth-2, contentHeight)
+			m.listViewport, m.diffViewport = shared.InitializeViewports(layout)
 			m.ready = true
 		} else {
-			m.listViewport.Width = m.listWidth - 2
-			m.listViewport.Height = contentHeight
-			m.diffViewport.Width = m.diffWidth - 2
-			m.diffViewport.Height = contentHeight
+			shared.UpdateViewportSizes(&m.listViewport, &m.diffViewport, layout)
 		}
 
 		// Update diff content if chunks exist
@@ -295,119 +289,56 @@ func (m *CommitComposer) updateConfirming(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *CommitComposer) createCommit() tea.Msg {
 	log.Println("Creating commit from selected diffs")
 
-	// First, create a patch from the selected diffs
+	// Create a patch from the selected diffs using the patch package
 	log.Println("Creating patch from selected diffs")
-	patch, cleanupWarnings := m.createPatchFromSelectedDiffs()
+	result := patch.CreateFromChunks(m.chunks, m.selectedChunks)
 
-	log.Printf(patch)
+	log.Printf("%s", result.Patch)
 
 	// Check if we have a valid patch
-	if len(patch) == 0 {
+	if len(result.Patch) == 0 {
 		log.Println("No valid patches to apply")
 		return errMsg{fmt.Errorf("no valid patches to apply")}
 	}
 
-	log.Printf("Created patch with %d bytes", len(patch))
+	log.Printf("Created patch with %d bytes", len(result.Patch))
 
 	// Log any cleanup warnings
-	if len(cleanupWarnings) > 0 {
+	if len(result.Warnings) > 0 {
 		log.Println("Warning: Potential corrupt content was detected and cleaned:")
-		for _, warning := range cleanupWarnings {
+		for _, warning := range result.Warnings {
 			log.Println(warning)
 		}
 
 		// If we're in confirm mode and there were warnings, return with the warning
-		if len(cleanupWarnings) > 0 {
-			log.Println("Returning corruption warning to user")
-			return warningMsg{
-				warnings:  cleanupWarnings,
-				patch:     patch,
-				commitMsg: m.commitMsg.Value(),
-			}
+		log.Println("Returning corruption warning to user")
+		return warningMsg{
+			warnings:  result.Warnings,
+			patch:     result.Patch,
+			commitMsg: m.commitMsg.Value(),
 		}
 	}
 
-	// Apply the patch
+	// Apply the patch using the patch package
 	log.Println("Applying patch to git index")
-	applyCmd := exec.Command("git", "apply", "--index", "-")
-	applyCmd.Stdin = strings.NewReader(patch)
-
-	if output, err := applyCmd.CombinedOutput(); err != nil {
-		log.Printf("Error applying patch: %v\n%s", err, output)
-		return errMsg{fmt.Errorf("failed to apply patch: %w\n%s", err, output)}
+	if err := patch.Apply(result.Patch); err != nil {
+		log.Printf("Error applying patch: %v", err)
+		return errMsg{err}
 	}
 	log.Println("Patch applied successfully")
 
-	// Create the commit
+	// Create the commit using the patch package
 	log.Printf("Creating git commit with message: %s", m.commitMsg.Value())
-	commitCmd := exec.Command("git", "commit", "-m", m.commitMsg.Value())
-	if output, err := commitCmd.CombinedOutput(); err != nil {
-		log.Printf("Error creating commit: %v\n%s", err, output)
-		return errMsg{fmt.Errorf("failed to create commit: %w\n%s", err, output)}
-	} else {
-		// Success - return the git output
-		log.Println("Commit created successfully")
-		m.result = string(output)
-		return successMsg{m.result}
-	}
-}
-
-// createPatchFromSelectedDiffs combines all selected diffs into a single patch
-func (m *CommitComposer) createPatchFromSelectedDiffs() (string, []string) {
-	log.Println("Combining selected diffs into a unified patch")
-	var patches []string
-	var warnings []string
-
-	for i, chunk := range m.chunks {
-		if selected, ok := m.selectedChunks[i]; ok && selected {
-			log.Printf("Adding diff for file: %s to patch", chunk.FilePath)
-			// Clean up the diff to make it applicable by git
-			cleanDiff, diffWarnings := m.cleanupDiffForGit(chunk)
-			if len(diffWarnings) > 0 {
-				for _, w := range diffWarnings {
-					warnings = append(warnings, fmt.Sprintf("%s: %s", chunk.FilePath, w))
-				}
-			}
-			if cleanDiff != "" {
-				patches = append(patches, cleanDiff)
-			}
-		}
+	output, err := patch.Commit(m.commitMsg.Value())
+	if err != nil {
+		log.Printf("Error creating commit: %v", err)
+		return errMsg{err}
 	}
 
-	if len(patches) == 0 {
-		return "", warnings
-	}
-	return strings.Join(patches, ""), warnings
-}
-
-// cleanupDiffForGit prepares a diff for use with git apply
-func (m *CommitComposer) cleanupDiffForGit(c chunk.Chunk) (string, []string) {
-	diff := c.Diff
-	var warnings []string
-
-	// Skip binary files
-	if strings.HasPrefix(diff, "Binary file ") {
-		log.Printf("Skipping binary file: %s", c.FilePath)
-		return "", nil
-	}
-
-	// Ensure the diff ends with a newline for proper git apply
-	if !strings.HasSuffix(diff, "\n") {
-		diff = diff + "\n"
-	}
-
-	// Check for null bytes which would corrupt the patch
-	if strings.Contains(diff, "\x00") {
-		warning := "Diff contains null bytes (file may be binary)"
-		log.Printf("Warning: %s for file %s", warning, c.FilePath)
-		warnings = append(warnings, warning)
-		return "", warnings
-	}
-
-	// Normalize line endings
-	diff = strings.ReplaceAll(diff, "\r\n", "\n")
-
-	return diff, warnings
+	// Success - return the git output
+	log.Println("Commit created successfully")
+	m.result = output
+	return successMsg{m.result}
 }
 
 // errMsg represents an error message
@@ -567,11 +498,7 @@ func (m *CommitComposer) renderChunkListPanel() string {
 	m.listViewport.SetContent(strings.Join(items, "\n"))
 
 	// Ensure selected item is visible
-	if m.cursor < m.listViewport.YOffset {
-		m.listViewport.YOffset = m.cursor
-	} else if m.cursor >= m.listViewport.YOffset+m.listViewport.Height {
-		m.listViewport.YOffset = m.cursor - m.listViewport.Height + 1
-	}
+	shared.EnsureItemVisible(&m.listViewport, m.cursor)
 
 	listStyle := lipgloss.NewStyle().
 		Width(m.listWidth).
@@ -590,27 +517,8 @@ func (m *CommitComposer) renderDiffPanel() string {
 	}
 
 	c := m.chunks[m.cursor]
-
-	// Create header with chunk info
-	fileLabel := tui.SubtleTextStyle.Render("File:")
-	filePath := tui.TextStyle.Bold(true).Render(c.FilePath)
-	timeLabel := tui.SubtleTextStyle.Render("Time:")
-	timeRange := tui.TextStyle.Render(fmt.Sprintf("%s → %s",
-		c.StartTime.Format("15:04:05"),
-		c.EndTime.Format("15:04:05")))
-
-	header := lipgloss.NewStyle().
-		Padding(1, 2).
-		Render(fileLabel + " " + filePath + "  " + timeLabel + " " + timeRange)
-
-	diffStyle := lipgloss.NewStyle().
-		Width(m.diffWidth).
-		Height(m.height).
-		BorderStyle(lipgloss.ThickBorder()).
-		BorderForeground(tui.ColorTitle).
-		Padding(0, 1)
-
-	return diffStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, m.diffViewport.View()))
+	header := shared.RenderChunkHeader(c, tui.SubtleTextStyle, tui.TextStyle.Bold(true))
+	return shared.RenderDiffPanel(header, m.diffViewport.View(), m.diffWidth, m.height, tui.ColorTitle)
 }
 
 // updateDiffContent updates the diff viewport with the current chunk's diff
@@ -620,64 +528,9 @@ func (m *CommitComposer) updateDiffContent() {
 	}
 
 	c := m.chunks[m.cursor]
-	diffContent := m.formatDiff(c.Diff)
+	diffContent := chunk.FormatDiff(c.Diff)
 	m.diffViewport.SetContent(diffContent)
 	m.diffViewport.GotoTop()
-}
-
-// formatDiff applies syntax highlighting to diff content (same as in DiffViewer)
-func (m *CommitComposer) formatDiff(diff string) string {
-	// Check if this is a binary file message
-	if strings.HasPrefix(diff, "Binary file ") {
-		binaryStyle := lipgloss.NewStyle().
-			Foreground(tui.ColorWarning).
-			Bold(true)
-		infoStyle := lipgloss.NewStyle().
-			Foreground(tui.ColorTertiary)
-
-		lines := strings.Split(diff, "\n")
-		var formatted []string
-		for i, line := range lines {
-			if i == 0 {
-				formatted = append(formatted, binaryStyle.Render("⚠ "+line))
-			} else if strings.TrimSpace(line) != "" {
-				formatted = append(formatted, infoStyle.Render("  "+line))
-			}
-		}
-		return strings.Join(formatted, "\n")
-	}
-
-	lines := strings.Split(diff, "\n")
-	var formatted []string
-
-	// Style definitions for diff lines - using our color palette
-	addedStyle := lipgloss.NewStyle().Foreground(tui.ColorSuccess).Bold(false)
-	removedStyle := lipgloss.NewStyle().Foreground(tui.ColorError).Bold(false)
-	contextStyle := lipgloss.NewStyle().Foreground(tui.ColorTertiary)
-	headerStyle := lipgloss.NewStyle().Foreground(tui.ColorAccent).Bold(true)
-	rangeStyle := lipgloss.NewStyle().Foreground(tui.ColorWarning).Bold(true)
-
-	for _, line := range lines {
-		switch {
-		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
-			// File headers in diff
-			formatted = append(formatted, headerStyle.Render(line))
-		case strings.HasPrefix(line, "+"):
-			formatted = append(formatted, addedStyle.Render(line))
-		case strings.HasPrefix(line, "-"):
-			formatted = append(formatted, removedStyle.Render(line))
-		case strings.HasPrefix(line, "@@"):
-			formatted = append(formatted, rangeStyle.Render(line))
-		case strings.HasPrefix(line, "diff --git") || strings.HasPrefix(line, "index"):
-			formatted = append(formatted, tui.SubtleTextStyle.Render(line))
-		case strings.HasPrefix(line, "File:") || strings.HasPrefix(line, "Time:") || strings.HasPrefix(line, "Hash:"):
-			formatted = append(formatted, contextStyle.Render(line))
-		default:
-			formatted = append(formatted, tui.TextStyle.Render(line))
-		}
-	}
-
-	return strings.Join(formatted, "\n")
 }
 
 // renderEditingView shows the commit message editing interface
@@ -770,28 +623,25 @@ func (m *CommitComposer) updateWarning(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *CommitComposer) applyPendingPatch() tea.Msg {
 	log.Println("Applying patch after warning confirmation")
 
-	// Apply the patch
-	applyCmd := exec.Command("git", "apply", "--cached", "-")
-	applyCmd.Stdin = strings.NewReader(m.pendingPatch)
-
-	if output, err := applyCmd.CombinedOutput(); err != nil {
-		log.Printf("Error applying patch: %v\n%s", err, output)
-		return errMsg{fmt.Errorf("failed to apply patch: %w\n%s", err, output)}
+	// Apply the patch using the patch package
+	if err := patch.Apply(m.pendingPatch); err != nil {
+		log.Printf("Error applying patch: %v", err)
+		return errMsg{err}
 	}
 	log.Println("Patch applied successfully")
 
-	// Create the commit
+	// Create the commit using the patch package
 	log.Printf("Creating git commit with message: %s", m.pendingCommitMsg)
-	commitCmd := exec.Command("git", "commit", "-m", m.pendingCommitMsg)
-	if output, err := commitCmd.CombinedOutput(); err != nil {
-		log.Printf("Error creating commit: %v\n%s", err, output)
-		return errMsg{fmt.Errorf("failed to create commit: %w\n%s", err, output)}
-	} else {
-		// Success - return the git output
-		log.Println("Commit created successfully")
-		m.result = string(output)
-		return successMsg{m.result}
+	output, err := patch.Commit(m.pendingCommitMsg)
+	if err != nil {
+		log.Printf("Error creating commit: %v", err)
+		return errMsg{err}
 	}
+
+	// Success - return the git output
+	log.Println("Commit created successfully")
+	m.result = output
+	return successMsg{m.result}
 }
 
 // renderConfirmationView shows the confirmation dialog
