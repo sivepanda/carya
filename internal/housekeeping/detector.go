@@ -12,12 +12,12 @@ var autodetectJSON []byte
 
 // PackageType represents a detected package manager or build system
 type PackageType struct {
-	Name        string                       `json:"name"`
-	DetectFile  string                       `json:"detectFile"`
-	DetectFiles []string                     `json:"detectFiles,omitempty"` // Multiple files, all must exist
-	Excludes    []string                     `json:"excludes,omitempty"`    // Package managers to exclude when this is detected
-	Description string                       `json:"description"`
-	Commands    map[string][]Command         `json:"commands"`
+	Name        string               `json:"name"`
+	DetectFile  string               `json:"detectFile"`
+	DetectFiles []string             `json:"detectFiles,omitempty"` // Multiple files, all must exist
+	Excludes    []string             `json:"excludes,omitempty"`    // Package managers to exclude when this is detected
+	Description string               `json:"description"`
+	Commands    map[string][]Command `json:"commands"`
 }
 
 // DetectedPackage contains information about a detected package system
@@ -90,7 +90,7 @@ func (d *Detector) DetectPackages() ([]DetectedPackage, error) {
 
 		// Handle glob patterns (like *.csproj)
 		if filepath.Base(pkgType.DetectFile) != pkgType.DetectFile &&
-		   (pkgType.DetectFile[0] == '*' || pkgType.DetectFile == "*.csproj") {
+			(pkgType.DetectFile[0] == '*' || pkgType.DetectFile == "*.csproj") {
 			matches, err := filepath.Glob(filepath.Join(d.rootDir, pkgType.DetectFile))
 			if err == nil && len(matches) > 0 {
 				detected = append(detected, DetectedPackage{

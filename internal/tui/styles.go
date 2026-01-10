@@ -124,9 +124,9 @@ var (
 			PaddingLeft(ListIndent)
 
 	SelectedItemStyle = lipgloss.NewStyle().
-			Foreground(ColorHighlight).
-			Bold(true).
-			PaddingLeft(ListIndent)
+				Foreground(ColorHighlight).
+				Bold(true).
+				PaddingLeft(ListIndent)
 
 	ItemDescStyle = lipgloss.NewStyle().
 			Foreground(ColorSecondary).

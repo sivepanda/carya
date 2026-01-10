@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-//lorme upsum dolor
-
 // ChunkStore defines the interface for persisting and retrieving chunks.
 type ChunkStore interface {
 	// SaveChunk persists a chunk to the store.
@@ -27,17 +25,17 @@ type EventEmitter interface {
 
 // Manager coordinates chunk creation, storage, and lifecycle management. It uses a ChunkStrategy to determine when to create chunks and manages periodic flushing of stale chunks.
 type Manager struct {
-	mu           sync.RWMutex  // Protects concurrent access to strategy
-	strategy     ChunkStrategy // Strategy for creating chunks
-	store        ChunkStore    // Storage backend for chunks
-	emitter      EventEmitter  // Event emitter for notifications
-	ticker       *time.Ticker  // Timer for periodic flushing
-	stopCh       chan struct{} // Channel to signal shutdown
-	lastActivity time.Time     // Time of last file change
-	isIdle       bool          // Whether system is in idle mode
-	idleThreshold time.Duration // Time before considering system idle
+	mu             sync.RWMutex  // Protects concurrent access to strategy
+	strategy       ChunkStrategy // Strategy for creating chunks
+	store          ChunkStore    // Storage backend for chunks
+	emitter        EventEmitter  // Event emitter for notifications
+	ticker         *time.Ticker  // Timer for periodic flushing
+	stopCh         chan struct{} // Channel to signal shutdown
+	lastActivity   time.Time     // Time of last file change
+	isIdle         bool          // Whether system is in idle mode
+	idleThreshold  time.Duration // Time before considering system idle
 	activeInterval time.Duration // Flush interval when active
-	idleInterval time.Duration // Flush interval when idle
+	idleInterval   time.Duration // Flush interval when idle
 }
 
 // NewManager creates a new chunk manager with the specified strategy, store, and emitter. The manager will flush stale chunks every 5 minutes when active, and every 30 minutes when idle.
@@ -216,7 +214,7 @@ func (m *Manager) switchToActiveMode() {
 func (m *Manager) FlushStatus() (interval time.Duration, isIdle bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	if m.isIdle {
 		return m.idleInterval, true
 	}

@@ -14,11 +14,11 @@ type Command struct {
 }
 
 type Config struct {
-	Version            string    `json:"version"`
+	Version                 string    `json:"version"`
 	AutoApprovePostPull     bool      `json:"auto_approve_post_pull,omitempty"`
 	AutoApprovePostCheckout bool      `json:"auto_approve_post_checkout,omitempty"`
-	PostPull           []Command `json:"post-pull"`
-	PostCheckout       []Command `json:"post-checkout"`
+	PostPull                []Command `json:"post-pull"`
+	PostCheckout            []Command `json:"post-checkout"`
 }
 
 const (

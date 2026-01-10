@@ -15,10 +15,10 @@ import (
 
 // Initializer manages the initialization process for a new Carya repository
 type Initializer struct {
-	repo             *repository.Repository
-	enabledFeatures  []string
-	engineFeature    *engine.EngineFeature
-	watcherFeature   *watcher.WatcherFeature
+	repo            *repository.Repository
+	enabledFeatures []string
+	engineFeature   *engine.EngineFeature
+	watcherFeature  *watcher.WatcherFeature
 }
 
 // NewInitializer creates a new initializer with specified features

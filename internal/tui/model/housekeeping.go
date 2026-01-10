@@ -49,28 +49,28 @@ type PackageItem struct {
 
 // Housekeeping represents the Bubble Tea model for housekeeping setup
 type Housekeeping struct {
-	help              help.Model
-	keys              tui.KeyMap
-	spinner           spinner.Model
-	state             int
-	cursor            int
-	detector          *housekeeping.Detector
-	detected          []housekeeping.DetectedPackage
-	packages          []PackageItem // Detected packages with selection state
-	packageCursor     int
-	categories        []CategoryItem
-	categoryCursor    int
-	currentCategory   int // Index for multi-category processing
-	suggestions       []SuggestionItem
-	manualInput       textinput.Model
-	manualInputs      []textinput.Model // For command, workingDir, description
-	manualInputFocus  int
-	err               error
-	width             int
-	height            int
-	showAll           bool
-	config            *housekeeping.Config
-	addedCount        int
+	help             help.Model
+	keys             tui.KeyMap
+	spinner          spinner.Model
+	state            int
+	cursor           int
+	detector         *housekeeping.Detector
+	detected         []housekeeping.DetectedPackage
+	packages         []PackageItem // Detected packages with selection state
+	packageCursor    int
+	categories       []CategoryItem
+	categoryCursor   int
+	currentCategory  int // Index for multi-category processing
+	suggestions      []SuggestionItem
+	manualInput      textinput.Model
+	manualInputs     []textinput.Model // For command, workingDir, description
+	manualInputFocus int
+	err              error
+	width            int
+	height           int
+	showAll          bool
+	config           *housekeeping.Config
+	addedCount       int
 }
 
 // NewHousekeeping creates a new housekeeping model

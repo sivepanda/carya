@@ -29,7 +29,7 @@ var composeCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
 			os.Exit(1)
 		}
-		
+
 		// Set up logging immediately
 		logFile, err := os.OpenFile(repo.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
@@ -60,7 +60,7 @@ var composeCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error running commit composer: %v\n", err)
 			os.Exit(1)
 		}
-		
+
 		log.Println("===== Compose command completed =====")
 	},
 }
