@@ -60,10 +60,13 @@ func NewEngineWithShadow(storePath, shadowPath, repoRoot, caryaPath string) (*En
 		return nil, err
 	}
 
-	// Initialize shadow repository
 	shadow := git.NewShadowRepo(caryaPath, repoRoot)
 	if err := shadow.Initialize(); err != nil {
 		return nil, err
+	}
+
+	if err := shadow.SeedIndexFromMainHEAD(); err != nil {
+		log.Printf("Warning: could not seed shadow index from HEAD: %v", err)
 	}
 
 	// Initialize ref manager

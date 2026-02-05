@@ -6,9 +6,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"carya/internal/config"
 	"carya/internal/daemon"
 	"carya/internal/features/engine"
 	"carya/internal/features/watcher"
@@ -38,15 +40,10 @@ var daemonCmd = &cobra.Command{
 			log.Fatalf("Not a Carya repository. Run 'carya init' first.")
 		}
 
-		d := daemon.New(
-			repo.PIDPath(),
-			repo.LogPath(),
-		)
-
+		d := daemon.New(repo.PIDPath(), repo.LogPath())
 		if err := d.WritePID(); err != nil {
 			log.Fatalf("Failed to write PID file: %v", err)
 		}
-
 		defer d.RemovePID()
 
 		logFile, err := os.OpenFile(repo.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -58,19 +55,19 @@ var daemonCmd = &cobra.Command{
 
 		log.Println("Starting Carya daemon...")
 
-		// Fetch team state on startup
+		teamCfg := config.LoadTeamConfig(repo.CaryaPath())
 		refManager := git.NewRefManager(repo.RootPath())
-		if err := refManager.FetchCaryaRefs("origin"); err != nil {
-			log.Printf("Note: Could not fetch team refs from origin: %v", err)
-		} else {
-			log.Println("Fetched team refs from origin")
+
+		if teamCfg.AutoFetch {
+			if err := refManager.FetchCaryaRefs("origin"); err != nil {
+				log.Printf("Note: Could not fetch team refs from origin: %v", err)
+			} else {
+				log.Println("Fetched team refs from origin")
+			}
 		}
 
-		// Set base ref to current HEAD
 		if err := refManager.SetBaseRef(); err != nil {
 			log.Printf("Note: Could not set base ref: %v", err)
-		} else {
-			log.Println("Set refs/carya/base to HEAD")
 		}
 
 		engineFeature := engine.NewEngineFeature()
@@ -98,29 +95,56 @@ var daemonCmd = &cobra.Command{
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGUSR1)
 
+		var fetchInProgress int32
+
 		go func() {
-			ticker := time.NewTicker(10 * time.Second)
-			defer ticker.Stop()
+			statusTicker := time.NewTicker(10 * time.Second)
+			publishTicker := time.NewTicker(60 * time.Second)
+			fetchTicker := time.NewTicker(2 * time.Minute)
+			defer statusTicker.Stop()
+			defer publishTicker.Stop()
+			defer fetchTicker.Stop()
 
 			for {
 				select {
-				case <-ticker.C:
+				case <-statusTicker.C:
 					interval, isIdle := engineFeature.Engine().FlushStatus()
 					status := DaemonStatus{
 						FlushInterval: interval.String(),
 						IsIdle:        isIdle,
 						LastUpdate:    time.Now().Format(time.RFC3339),
 					}
-
 					data, err := json.Marshal(status)
 					if err != nil {
-						log.Printf("Error marshaling status: %v", err)
 						continue
 					}
+					os.WriteFile(repo.StatusPath(), data, 0644)
 
-					if err := os.WriteFile(repo.StatusPath(), data, 0644); err != nil {
-						log.Printf("Error writing status file: %v", err)
+				case <-publishTicker.C:
+					if !teamCfg.AutoPublish {
+						continue
 					}
+					engineFeature.Engine().FlushAll()
+					if err := engineFeature.Engine().PublishState(); err != nil {
+						log.Printf("Auto-publish: %v", err)
+					} else {
+						log.Println("Auto-published working state")
+					}
+
+				case <-fetchTicker.C:
+					if !teamCfg.AutoFetch {
+						continue
+					}
+					if !atomic.CompareAndSwapInt32(&fetchInProgress, 0, 1) {
+						continue
+					}
+					go func() {
+						defer atomic.StoreInt32(&fetchInProgress, 0)
+						if err := refManager.FetchCaryaRefs("origin"); err != nil {
+							log.Printf("Auto-fetch: %v", err)
+						}
+					}()
+
 				case <-sigCh:
 					return
 				}
@@ -136,8 +160,17 @@ var daemonCmd = &cobra.Command{
 				} else {
 					log.Println("All chunks flushed successfully")
 				}
+				if teamCfg.AutoPublish {
+					if err := engineFeature.Engine().PublishState(); err != nil {
+						log.Printf("Error publishing state: %v", err)
+					}
+				}
 			case os.Interrupt, syscall.SIGTERM:
 				log.Println("Shutting down Carya daemon...")
+				engineFeature.Engine().FlushAll()
+				if teamCfg.AutoPublish {
+					engineFeature.Engine().PublishState()
+				}
 				return
 			}
 		}
@@ -225,9 +258,9 @@ var statusCmd = &cobra.Command{
 				if err := json.Unmarshal(statusData, &status); err == nil {
 					mode := "active"
 					if status.IsIdle {
-						mode = "idle"
+						mode = "backing off"
 					}
-					fmt.Printf("  Flush interval: %s (%s mode)\n", status.FlushInterval, mode)
+					fmt.Printf("  Flush interval: %s (%s)\n", status.FlushInterval, mode)
 				}
 			}
 		} else {

@@ -69,7 +69,11 @@ var housekeepingAddCmd = &cobra.Command{
 			category = "post-checkout"
 		}
 
-		if err := config.AddCommand(category, command, workingDir, description); err != nil {
+		if err := config.AddCommand(category, housekeeping.Command{
+			Command:     command,
+			WorkingDir:  workingDir,
+			Description: description,
+		}); err != nil {
 			fmt.Printf("Error adding command: %v\n", err)
 			return
 		}
@@ -112,6 +116,9 @@ var housekeepingListCmd = &cobra.Command{
 					fmt.Printf("     Command: %s\n", cmd.Command)
 					if cmd.WorkingDir != "." && cmd.WorkingDir != "" {
 						fmt.Printf("     Working Dir: %s\n", cmd.WorkingDir)
+					}
+					if len(cmd.TriggerFiles) > 0 {
+						fmt.Printf("     Triggers: %s\n", strings.Join(cmd.TriggerFiles, ", "))
 					}
 				}
 			}
@@ -233,14 +240,14 @@ var housekeepingAutoCmd = &cobra.Command{
 		}
 
 		detector := housekeeping.NewDetector(".")
-		suggestions, err := detector.GetSuggestedCommands(category)
+		detected, err := detector.DetectPackages()
 		if err != nil {
-			fmt.Printf("Error getting suggestions: %v\n", err)
+			fmt.Printf("Error detecting packages: %v\n", err)
 			return
 		}
 
-		if len(suggestions) == 0 {
-			fmt.Printf("No suggestions for %s commands.\n", category)
+		if len(detected) == 0 {
+			fmt.Printf("No package managers detected.\n")
 			return
 		}
 
@@ -250,21 +257,47 @@ var housekeepingAutoCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Printf("Adding %d suggested %s commands:\n", len(suggestions), category)
-		for _, suggestion := range suggestions {
-			fmt.Printf("  • %s\n", suggestion.Description)
-			if err := config.AddCommand(category, suggestion.Command, suggestion.WorkingDir, suggestion.Description); err != nil {
-				fmt.Printf("Error adding command: %v\n", err)
-				return
+		count := 0
+		for _, pkg := range detected {
+			// Collect trigger files from the package type
+			var triggerFiles []string
+			if pkg.Type.DetectFile != "" {
+				triggerFiles = append(triggerFiles, pkg.Type.DetectFile)
+			}
+			triggerFiles = append(triggerFiles, pkg.Type.DetectFiles...)
+
+			commands, exists := pkg.Type.Commands[category]
+			if !exists {
+				continue
+			}
+			for _, suggestion := range commands {
+				fmt.Printf("  • %s\n", suggestion.Description)
+				if err := config.AddCommand(category, housekeeping.Command{
+					Command:      suggestion.Command,
+					WorkingDir:   suggestion.WorkingDir,
+					Description:  suggestion.Description,
+					TriggerFiles: triggerFiles,
+				}); err != nil {
+					fmt.Printf("Error adding command: %v\n", err)
+					return
+				}
+				count++
 			}
 		}
+
+		if count == 0 {
+			fmt.Printf("No suggestions for %s commands.\n", category)
+			return
+		}
+
+		fmt.Printf("Adding %d suggested %s commands:\n", count, category)
 
 		if err := config.Save(); err != nil {
 			fmt.Printf("Error saving config: %v\n", err)
 			return
 		}
 
-		fmt.Printf("\nSuccessfully added %d %s commands!\n", len(suggestions), category)
+		fmt.Printf("\nSuccessfully added %d %s commands!\n", count, category)
 	},
 }
 

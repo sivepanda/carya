@@ -8,9 +8,10 @@ import (
 )
 
 type Command struct {
-	Command     string `json:"command"`
-	WorkingDir  string `json:"working_dir"`
-	Description string `json:"description"`
+	Command      string   `json:"command"`
+	WorkingDir   string   `json:"working_dir"`
+	Description  string   `json:"description"`
+	TriggerFiles []string `json:"trigger_files,omitempty"` // Files that trigger this command when changed
 }
 
 type Config struct {
@@ -23,7 +24,7 @@ type Config struct {
 
 const (
 	ConfigVersion = "1.0"
-	ConfigFile    = "housekeeping.json"
+	ConfigFile    = "carya.json"
 )
 
 func NewConfig() *Config {
@@ -34,18 +35,15 @@ func NewConfig() *Config {
 	}
 }
 
+// GetConfigPath returns the path to the shared project config file (carya.json in project root).
+// This file is tracked by git so the team shares the same housekeeping configuration.
 func GetConfigPath() (string, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	caryaDir := filepath.Join(wd, ".carya")
-	if _, err := os.Stat(caryaDir); os.IsNotExist(err) {
-		return "", fmt.Errorf(".carya directory not found - run 'carya init' first")
-	}
-
-	return filepath.Join(caryaDir, ConfigFile), nil
+	return filepath.Join(wd, ConfigFile), nil
 }
 
 func LoadConfig() (*Config, error) {
@@ -89,13 +87,7 @@ func (c *Config) Save() error {
 	return nil
 }
 
-func (c *Config) AddCommand(category, command, workingDir, description string) error {
-	cmd := Command{
-		Command:     command,
-		WorkingDir:  workingDir,
-		Description: description,
-	}
-
+func (c *Config) AddCommand(category string, cmd Command) error {
 	switch category {
 	case "post-pull":
 		c.PostPull = append(c.PostPull, cmd)

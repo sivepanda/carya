@@ -2,7 +2,7 @@ package chunk
 
 import (
 	"bytes"
-	"crypto/sha256"
+	"crypto/sha1"
 	"fmt"
 	"log"
 	"sync"
@@ -57,6 +57,15 @@ func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 
 	active, exists := s.activeChunks[event.Path]
 	if !exists {
+		// Use the shadow index entry (seeded from HEAD) as the baseline.
+		// For new files not in HEAD, baselineHash falls back to the new content hash.
+		baselineHash := blobHash
+		if s.shadow != nil {
+			if existing, _ := s.shadow.GetIndexEntry(event.Path); existing != "" {
+				baselineHash = existing
+			}
+		}
+
 		s.activeChunks[event.Path] = &activeChunk{
 			chunk: &Chunk{
 				ID:        ChunkID(fmt.Sprintf("%s-%d", event.Path, event.Time.Unix())),
@@ -67,11 +76,10 @@ func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 				Manual:    false,
 			},
 			lastUpdate:      event.Time,
-			initialBlobHash: blobHash,
+			initialBlobHash: baselineHash,
 			latestBlobHash:  blobHash,
 		}
 
-		// Update shadow repo index
 		if s.shadow != nil {
 			if err := s.shadow.UpdateIndex(event.Path, blobHash, "100644"); err != nil {
 				log.Printf("Failed to update shadow index for %s: %v", event.Path, err)
@@ -159,10 +167,9 @@ func (s *UnifiedStrategy) hashContent(content []byte) (string, error) {
 		return s.shadow.HashObject(content)
 	}
 
-	// Fallback: compute hash without storing (for backwards compatibility)
-	// This uses the same algorithm as git for consistency
-	import_hash := fmt.Sprintf("blob %d\x00%s", len(content), content)
-	h := sha256.Sum256([]byte(import_hash))
+	// Fallback: compute hash using git's blob hashing algorithm (SHA1)
+	blobHeader := fmt.Sprintf("blob %d\x00%s", len(content), content)
+	h := sha1.Sum([]byte(blobHeader))
 	return fmt.Sprintf("%x", h), nil
 }
 

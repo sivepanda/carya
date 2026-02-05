@@ -145,13 +145,23 @@ func (r *RefManager) GetBaseRef() (string, error) {
 
 // FetchCaryaRefs fetches all carya refs from a remote.
 func (r *RefManager) FetchCaryaRefs(remote string) error {
+	// Verify the remote exists before attempting to fetch
+	checkCmd := exec.Command("git", "remote", "get-url", remote)
+	checkCmd.Dir = r.repoPath
+	if _, err := checkCmd.Output(); err != nil {
+		return fmt.Errorf("remote '%s' not found", remote)
+	}
+
 	cmd := exec.Command("git", "fetch", remote, "refs/carya/*:refs/carya/*")
 	cmd.Dir = r.repoPath
 
 	if output, err := cmd.CombinedOutput(); err != nil {
-		// Ignore errors if remote doesn't have carya refs
-		_ = output
-		return nil
+		outputStr := strings.TrimSpace(string(output))
+		// "no match" just means no carya refs exist on the remote yet
+		if strings.Contains(outputStr, "no match") {
+			return nil
+		}
+		return fmt.Errorf("failed to fetch carya refs: %w\nOutput: %s", err, outputStr)
 	}
 
 	return nil

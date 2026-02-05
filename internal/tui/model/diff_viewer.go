@@ -14,6 +14,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -28,6 +29,7 @@ type DiffViewer struct {
 	cursor       int
 	listViewport viewport.Model
 	diffViewport viewport.Model
+	spinner      spinner.Model
 	store        ChunkStore
 	width        int
 	height       int
@@ -52,24 +54,17 @@ func NewDiffViewer(store ChunkStore) (*DiffViewer, error) {
 		return nil, fmt.Errorf("failed to load chunks: %w", err)
 	}
 
-	// Log information about loaded chunks
 	log.Printf("Loaded %d chunks", len(chunks))
-	for i, c := range chunks {
-		log.Printf("Chunk %d: ID=%s, FilePath=%s, DiffLength=%d",
-			i, c.ID, c.FilePath, len(c.Diff))
-		if len(c.Diff) == 0 {
-			log.Printf("WARNING: Chunk %d has empty diff content", i)
-		}
-	}
 
 	m := &DiffViewer{
-		help:   h,
-		keys:   tui.DefaultKeys(),
-		chunks: chunks,
-		cursor: 0,
-		store:  store,
-		width:  80,
-		height: 24,
+		help:    h,
+		keys:    tui.DefaultKeys(),
+		chunks:  chunks,
+		cursor:  0,
+		store:   store,
+		spinner: shared.NewDefaultSpinner(tui.ColorAccent),
+		width:   80,
+		height:  24,
 	}
 
 	return m, nil
@@ -77,7 +72,7 @@ func NewDiffViewer(store ChunkStore) (*DiffViewer, error) {
 
 // Init initializes the model
 func (m *DiffViewer) Init() tea.Cmd {
-	return nil
+	return m.spinner.Tick
 }
 
 // LoadedChunksMsg indicates chunks have been loaded
@@ -88,8 +83,6 @@ type LoadedChunksMsg struct {
 
 // Update handles messages and updates the model
 func (m *DiffViewer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-
 	switch msg := msg.(type) {
 	case LoadedChunksMsg:
 		if msg.Error != nil {
@@ -147,7 +140,14 @@ func (m *DiffViewer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	return m, cmd
+	// Update spinner while loading
+	if !m.ready {
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	}
+
+	return m, nil
 }
 
 // View renders the model
@@ -168,9 +168,9 @@ func (m *DiffViewer) View() string {
 	}
 
 	if !m.ready {
-		spinner := tui.SubtleTextStyle.Render("◐")
-		loadingText := tui.TextStyle.Render("  Loading...")
-		return lipgloss.JoinVertical(lipgloss.Center, spinner+" "+loadingText)
+		loadingText := tui.TextStyle.Render(" Loading...")
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+			lipgloss.JoinHorizontal(lipgloss.Center, m.spinner.View(), loadingText))
 	}
 
 	return m.renderSplitView()
@@ -277,27 +277,12 @@ func (m *DiffViewer) updateDiffContent() {
 
 	c := m.chunks[m.cursor]
 
-	// Debug logging to check if diff content exists
-	diffLength := len(c.Diff)
-	if diffLength == 0 {
-		log.Printf("WARNING: Empty diff content for chunk %s", c.ID)
-		m.diffViewport.SetContent(lipgloss.NewStyle().
-			Foreground(tui.ColorError).
-			Bold(true).
-			Render("WARNING: Diff content is empty"))
+	if len(c.Diff) == 0 {
+		m.diffViewport.SetContent(tui.SubtleTextStyle.Render("No diff content available"))
 		return
 	}
 
-	// Log the raw diff content for debugging
-	log.Printf("Displaying diff for chunk %s (file: %s, length: %d)",
-		c.ID, c.FilePath, diffLength)
-	log.Printf("Raw diff content:\n%s", c.Diff)
-
-	// Format the diff content with syntax highlighting
-	diffContent := chunk.FormatDiff(c.Diff)
-
-	// Set the content in the viewport
-	m.diffViewport.SetContent(diffContent)
+	m.diffViewport.SetContent(chunk.FormatDiff(c.Diff))
 	m.diffViewport.GotoTop()
 }
 

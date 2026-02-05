@@ -25,7 +25,6 @@ var pullCmd = &cobra.Command{
 
 		// Only run git pull if --no-pull is not set
 		if !noPull {
-			// Check if housekeeping.json changed during pull
 			var err error
 			housekeepingChanged, changedFiles, err = pullFromGit()
 			if err != nil {
@@ -60,22 +59,24 @@ var pullCmd = &cobra.Command{
 	},
 }
 
-// pullFromGit executes git pull and returns whether housekeeping.json was changed and the list of changed files
+// pullFromGit executes git pull and returns whether carya.json was changed and the list of changed files
 func pullFromGit() (bool, []string, error) {
-	// Get the path to housekeeping.json relative to git root
+	configPath, err := housekeeping.GetConfigPath()
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to get config path: %w", err)
+	}
+
 	wd, err := os.Getwd()
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	caryaDir := filepath.Join(wd, ".carya")
-	housekeepingPath := filepath.Join(caryaDir, "housekeeping.json")
-	relPath, err := filepath.Rel(wd, housekeepingPath)
+	relPath, err := filepath.Rel(wd, configPath)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to get relative path: %w", err)
 	}
 
-	// Get the hash of housekeeping.json before pull
+	// Get the hash of carya.json before pull
 	beforeHash, _ := getFileHash(relPath)
 
 	// Get the current HEAD commit before pull
@@ -95,7 +96,7 @@ func pullFromGit() (bool, []string, error) {
 		return false, nil, fmt.Errorf("git pull failed: %w", err)
 	}
 
-	// Get the hash of housekeeping.json after pull
+	// Get the hash of carya.json after pull
 	afterHash, _ := getFileHash(relPath)
 
 	// Check if the file changed
