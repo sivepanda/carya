@@ -41,13 +41,42 @@ func (s *SQLiteStore) initTables() error {
 			end_time TIMESTAMP NOT NULL,
 			hash TEXT NOT NULL,
 			manual BOOLEAN NOT NULL,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			initial_blob_hash TEXT,
+			final_blob_hash TEXT,
+			tree_hash TEXT
 		);
 		CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON chunks(file_path);
 		CREATE INDEX IF NOT EXISTS idx_chunks_created_at ON chunks(created_at);
+		CREATE INDEX IF NOT EXISTS idx_chunks_tree_hash ON chunks(tree_hash);
 	`
 	_, err := s.db.Exec(query)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Run migrations for existing databases
+	return s.runMigrations()
+}
+
+// runMigrations adds new columns to existing tables if they don't exist.
+func (s *SQLiteStore) runMigrations() error {
+	// Check if columns exist and add them if not
+	migrations := []string{
+		"ALTER TABLE chunks ADD COLUMN initial_blob_hash TEXT",
+		"ALTER TABLE chunks ADD COLUMN final_blob_hash TEXT",
+		"ALTER TABLE chunks ADD COLUMN tree_hash TEXT",
+	}
+
+	for _, migration := range migrations {
+		// SQLite will error if column already exists, which is fine
+		s.db.Exec(migration)
+	}
+
+	// Ensure index exists
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_chunks_tree_hash ON chunks(tree_hash)")
+
+	return nil
 }
 
 // SaveChunk persists a chunk to the SQLite database, replacing any existing chunk with the same ID.

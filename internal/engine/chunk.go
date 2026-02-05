@@ -4,6 +4,8 @@ package engine
 
 import (
 	"carya/internal/chunk"
+	"carya/internal/git"
+	"carya/internal/identity"
 	"carya/internal/store"
 	"log"
 	"time"
@@ -14,6 +16,9 @@ import (
 type Engine struct {
 	chunkManager *chunk.Manager   // Manages chunk lifecycle and creation
 	store        chunk.ChunkStore // Storage backend for chunks
+	shadow       *git.ShadowRepo  // Shadow git repository for blob storage
+	refManager   *git.RefManager  // Ref manager for user state sharing
+	userID       string           // User identifier for team features
 }
 
 // SimpleEventEmitter provides basic logging-based event emission for chunk events.
@@ -37,13 +42,52 @@ func NewEngine(storePath string) (*Engine, error) {
 		return nil, err
 	}
 
-	strategy := chunk.NewUnifiedStrategy()
+	// Create strategy without shadow repo for backwards compatibility
+	strategy := chunk.NewUnifiedStrategy(nil)
 	emitter := &SimpleEventEmitter{}
 	manager := chunk.NewManager(strategy, chunkStore, emitter)
 
 	return &Engine{
 		chunkManager: manager,
 		store:        chunkStore,
+	}, nil
+}
+
+// NewEngineWithShadow creates a new Carya engine with shadow repository support.
+func NewEngineWithShadow(storePath, shadowPath, repoRoot, caryaPath string) (*Engine, error) {
+	chunkStore, err := store.NewSQLiteStore(storePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Initialize shadow repository
+	shadow := git.NewShadowRepo(caryaPath, repoRoot)
+	if err := shadow.Initialize(); err != nil {
+		return nil, err
+	}
+
+	// Initialize ref manager
+	refManager := git.NewRefManager(repoRoot)
+
+	// Get or create user identity
+	userIdentity := identity.NewUserIdentity(caryaPath)
+	userID, err := userIdentity.GetOrCreate()
+	if err != nil {
+		log.Printf("Warning: Failed to get user identity: %v", err)
+		userID = "unknown"
+	}
+
+	// Create strategy with shadow repo
+	strategy := chunk.NewUnifiedStrategy(shadow)
+	emitter := &SimpleEventEmitter{}
+	manager := chunk.NewManager(strategy, chunkStore, emitter)
+
+	return &Engine{
+		chunkManager: manager,
+		store:        chunkStore,
+		shadow:       shadow,
+		refManager:   refManager,
+		userID:       userID,
 	}, nil
 }
 
@@ -82,4 +126,33 @@ func (e *Engine) FlushAll() error {
 // FlushStatus returns the current flush interval and idle state.
 func (e *Engine) FlushStatus() (interval time.Duration, isIdle bool) {
 	return e.chunkManager.FlushStatus()
+}
+
+// PublishState writes the current working tree to a git ref for team sharing.
+func (e *Engine) PublishState() error {
+	if e.shadow == nil || e.refManager == nil {
+		return nil
+	}
+
+	treeHash, err := e.shadow.WriteTree()
+	if err != nil {
+		return err
+	}
+
+	return e.refManager.UpdateUserTreeRef(e.userID, treeHash)
+}
+
+// GetShadow returns the shadow repository.
+func (e *Engine) GetShadow() *git.ShadowRepo {
+	return e.shadow
+}
+
+// GetRefManager returns the ref manager.
+func (e *Engine) GetRefManager() *git.RefManager {
+	return e.refManager
+}
+
+// GetUserID returns the user identifier.
+func (e *Engine) GetUserID() string {
+	return e.userID
 }

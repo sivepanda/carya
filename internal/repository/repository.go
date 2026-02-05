@@ -68,3 +68,13 @@ func (r *Repository) LogPath() string {
 func (r *Repository) StatusPath() string {
 	return filepath.Join(r.caryaPath, "status.json")
 }
+
+// ShadowPath returns the path to the shadow git repository
+func (r *Repository) ShadowPath() string {
+	return filepath.Join(r.caryaPath, "shadow")
+}
+
+// UserIDPath returns the path to the user identity file
+func (r *Repository) UserIDPath() string {
+	return filepath.Join(r.caryaPath, "user-id")
+}

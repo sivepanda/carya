@@ -12,6 +12,7 @@ import (
 	"carya/internal/daemon"
 	"carya/internal/features/engine"
 	"carya/internal/features/watcher"
+	"carya/internal/git"
 	"carya/internal/repository"
 
 	"github.com/spf13/cobra"
@@ -56,6 +57,21 @@ var daemonCmd = &cobra.Command{
 		log.SetOutput(logFile)
 
 		log.Println("Starting Carya daemon...")
+
+		// Fetch team state on startup
+		refManager := git.NewRefManager(repo.RootPath())
+		if err := refManager.FetchCaryaRefs("origin"); err != nil {
+			log.Printf("Note: Could not fetch team refs from origin: %v", err)
+		} else {
+			log.Println("Fetched team refs from origin")
+		}
+
+		// Set base ref to current HEAD
+		if err := refManager.SetBaseRef(); err != nil {
+			log.Printf("Note: Could not set base ref: %v", err)
+		} else {
+			log.Println("Set refs/carya/base to HEAD")
+		}
 
 		engineFeature := engine.NewEngineFeature()
 		if err := engineFeature.Initialize(repo); err != nil {

@@ -10,6 +10,8 @@ import (
 
 	"carya/internal/features/engine"
 	"carya/internal/features/watcher"
+	"carya/internal/git"
+	"carya/internal/identity"
 	"carya/internal/repository"
 )
 
@@ -112,6 +114,22 @@ func (i *Initializer) Initialize() error {
 		fmt.Printf("Warning: Could not update .gitignore: %v\n", err)
 	} else {
 		fmt.Println("Added .carya/ to .gitignore")
+	}
+
+	// Initialize shadow repository
+	shadow := git.NewShadowRepo(i.repo.CaryaPath(), i.repo.RootPath())
+	if err := shadow.Initialize(); err != nil {
+		return fmt.Errorf("failed to initialize shadow repository: %w", err)
+	}
+	fmt.Println("Initialized shadow repository")
+
+	// Initialize user identity
+	userIdentity := identity.NewUserIdentity(i.repo.CaryaPath())
+	userID, err := userIdentity.GetOrCreate()
+	if err != nil {
+		fmt.Printf("Warning: Could not create user identity: %v\n", err)
+	} else {
+		fmt.Printf("User identity: %s\n", userID)
 	}
 
 	// Initialize features based on user selection
