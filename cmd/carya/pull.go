@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"carya/internal/housekeeping"
+	"github.com/sivepanda/mycelia"
 
 	"github.com/spf13/cobra"
 )
@@ -40,7 +40,7 @@ var pullCmd = &cobra.Command{
 		}
 
 		// Load and execute post-pull commands
-		config, err := housekeeping.LoadConfig()
+		config, err := mycelia.LoadConfig()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading housekeeping config: %v\n", err)
 			os.Exit(1)
@@ -51,7 +51,7 @@ var pullCmd = &cobra.Command{
 			autoApprove = config.IsAutoApprove("post-pull")
 		}
 
-		executor := housekeeping.NewExecutor(config)
+		executor := mycelia.NewExecutor(config)
 		if err := executor.ExecuteCategoryWithChangedFiles("post-pull", changedFiles, autoApprove); err != nil {
 			fmt.Fprintf(os.Stderr, "Error executing post-pull commands: %v\n", err)
 			os.Exit(1)
@@ -61,7 +61,7 @@ var pullCmd = &cobra.Command{
 
 // pullFromGit executes git pull and returns whether carya.json was changed and the list of changed files
 func pullFromGit() (bool, []string, error) {
-	configPath, err := housekeeping.GetConfigPath()
+	configPath, err := mycelia.GetConfigPath()
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to get config path: %w", err)
 	}

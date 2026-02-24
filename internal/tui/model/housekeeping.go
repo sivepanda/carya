@@ -1,801 +1,149 @@
 package model
 
 import (
-	"carya/internal/housekeeping"
 	"carya/internal/repository"
 	"carya/internal/tui"
-	"carya/internal/tui/shared"
-	"fmt"
-	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	primitives "github.com/sivepanda/mycelia/tui"
 )
 
-// Screen states for housekeeping
-const (
-	HKStateDetecting = iota
-	HKStatePackageSelect
-	HKStateCategorySelect
-	HKStateCommandSelect
-	HKStateManualInput
-	HKStateConfirm
-	HKStateExecute
-	HKStateComplete
-)
-
-// SuggestionItem represents a command suggestion with selection state
-type SuggestionItem struct {
-	Command      housekeeping.Command
-	TriggerFiles []string // Files that trigger this command (from package detect files)
-	Selected     bool
-}
-
-// CategoryItem represents a category with selection state
-type CategoryItem struct {
-	Name     string
-	Selected bool
-}
-
-// PackageItem represents a detected package with selection state
-type PackageItem struct {
-	Package  housekeeping.DetectedPackage
-	Selected bool
-}
-
-// Housekeeping represents the Bubble Tea model for housekeeping setup
+// Housekeeping is a thin controller that drives mycelia's Setup primitive.
+// It owns all key dispatch and delegates state/rendering to the primitive.
 type Housekeeping struct {
-	help             help.Model
-	keys             tui.KeyMap
-	spinner          spinner.Model
-	state            int
-	cursor           int
-	detector         *housekeeping.Detector
-	detected         []housekeeping.DetectedPackage
-	packages         []PackageItem // Detected packages with selection state
-	packageCursor    int
-	categories       []CategoryItem
-	categoryCursor   int
-	currentCategory  int // Index for multi-category processing
-	suggestions      []SuggestionItem
-	manualInput      textinput.Model
-	manualInputs     []textinput.Model // For command, workingDir, description
-	manualInputFocus int
-	err              error
-	width            int
-	height           int
-	showAll          bool
-	config           *housekeeping.Config
-	addedCount       int
+	keys     tui.KeyMap
+	help     help.Model
+	showAll  bool
+	setup    primitives.Setup
+	width    int
+	height   int
 }
 
-// NewHousekeeping creates a new housekeeping model
+// NewHousekeeping creates a new housekeeping model.
+// It performs carya-specific repo initialization synchronously (fast),
+// then delegates the setup wizard to mycelia's primitive.
 func NewHousekeeping() Housekeeping {
+	// Carya-specific: ensure .carya directory exists and is gitignored
+	if repo, err := repository.New(); err == nil {
+		_ = repo.EnsureExists()
+		_ = repo.EnsureGitignore()
+	}
+
 	h := help.New()
 	h.Styles.ShortDesc = tui.HelpDescStyle
 	h.Styles.ShortKey = tui.HelpKeyStyle
 	h.Styles.FullDesc = tui.HelpDescStyle
 	h.Styles.FullKey = tui.HelpKeyStyle
 
-	detector := housekeeping.NewDetector(".")
-
-	// Initialize text inputs for manual command entry
-	commandInput := textinput.New()
-	commandInput.Placeholder = "e.g., npm run build"
-	commandInput.Focus()
-	commandInput.CharLimit = 256
-	commandInput.Width = 50
-
-	workingDirInput := textinput.New()
-	workingDirInput.Placeholder = "e.g., ."
-	workingDirInput.CharLimit = 256
-	workingDirInput.Width = 50
-
-	descriptionInput := textinput.New()
-	descriptionInput.Placeholder = "e.g., Build the project"
-	descriptionInput.CharLimit = 256
-	descriptionInput.Width = 50
-
-	m := Housekeeping{
-		help:     h,
-		keys:     tui.DefaultKeys(),
-		spinner:  shared.NewDefaultSpinner(tui.ColorAccent),
-		state:    HKStateDetecting,
-		detector: detector,
-		width:    80,
-		categories: []CategoryItem{
-			{Name: "post-pull", Selected: true},
-			{Name: "post-checkout", Selected: true},
-		},
-		manualInputs: []textinput.Model{commandInput, workingDirInput, descriptionInput},
+	return Housekeeping{
+		keys:   tui.DefaultKeys(),
+		help:   h,
+		setup:  primitives.NewSetup(),
+		width:  80,
+		height: 24,
 	}
-
-	return m
 }
 
-// Init initializes the model
+// Init initializes the model by starting the setup primitive.
 func (m Housekeeping) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.detectPackages())
+	return m.setup.Init()
 }
 
-// detectPackages runs package detection
-func (m Housekeeping) detectPackages() tea.Cmd {
-	return func() tea.Msg {
-		// Ensure .carya directory exists and is gitignored
-		repo, err := repository.New()
-		if err != nil {
-			return DetectionCompleteMsg{Error: err}
-		}
-		if err := repo.EnsureExists(); err != nil {
-			return DetectionCompleteMsg{Error: err}
-		}
-		_ = repo.EnsureGitignore()
-
-		detected, err := m.detector.DetectPackages()
-		if err != nil {
-			return DetectionCompleteMsg{Error: err}
-		}
-
-		config, err := housekeeping.LoadConfig()
-		if err != nil {
-			return DetectionCompleteMsg{Error: err}
-		}
-
-		return DetectionCompleteMsg{
-			Detected: detected,
-			Config:   config,
-			Error:    nil,
-		}
-	}
-}
-
-// getSuggestions retrieves suggestions for the current category being processed
-func (m Housekeeping) getSuggestions() tea.Cmd {
-	return func() tea.Msg {
-		categoryName := m.categories[m.currentCategory].Name
-
-		// Get suggestions only from selected packages, carrying trigger files
-		var items []SuggestionItem
-		for _, pkgItem := range m.packages {
-			if !pkgItem.Selected {
-				continue
-			}
-			for _, pkgType := range housekeeping.PackageTypes {
-				if pkgType.Name != pkgItem.Package.Type.Name {
-					continue
-				}
-				// Collect trigger files from the package type
-				var triggerFiles []string
-				if pkgType.DetectFile != "" {
-					triggerFiles = append(triggerFiles, pkgType.DetectFile)
-				}
-				triggerFiles = append(triggerFiles, pkgType.DetectFiles...)
-
-				if commands, exists := pkgType.Commands[categoryName]; exists {
-					for _, cmd := range commands {
-						items = append(items, SuggestionItem{
-							Command:      cmd,
-							TriggerFiles: triggerFiles,
-							Selected:     true,
-						})
-					}
-				}
-				break
-			}
-		}
-
-		return SuggestionsLoadedMsg{
-			Category:    categoryName,
-			Suggestions: items,
-			Error:       nil,
-		}
-	}
-}
-
-// addSelectedCommands adds the selected commands to the config
-func (m Housekeeping) addSelectedCommands() tea.Cmd {
-	return func() tea.Msg {
-		categoryName := m.categories[m.currentCategory].Name
-		count := 0
-		for _, item := range m.suggestions {
-			if item.Selected {
-				cmd := housekeeping.Command{
-					Command:      item.Command.Command,
-					WorkingDir:   item.Command.WorkingDir,
-					Description:  item.Command.Description,
-					TriggerFiles: item.TriggerFiles,
-				}
-				err := m.config.AddCommand(categoryName, cmd)
-				if err != nil {
-					return CommandsAddedMsg{Error: err}
-				}
-				count++
-			}
-		}
-
-		if count > 0 {
-			err := m.config.Save()
-			if err != nil {
-				return CommandsAddedMsg{Error: err}
-			}
-		}
-
-		return CommandsAddedMsg{
-			Count:    count,
-			Category: categoryName,
-			Error:    nil,
-		}
-	}
-}
-
-// DetectionCompleteMsg indicates package detection is complete
-type DetectionCompleteMsg struct {
-	Detected []housekeeping.DetectedPackage
-	Config   *housekeeping.Config
-	Error    error
-}
-
-// SuggestionsLoadedMsg indicates suggestions have been loaded
-type SuggestionsLoadedMsg struct {
-	Category    string
-	Suggestions []SuggestionItem
-	Error       error
-}
-
-// CommandsAddedMsg indicates commands have been added
-type CommandsAddedMsg struct {
-	Count    int
-	Category string
-	Error    error
-}
-
-// Update handles messages and updates the model
+// Update handles all messages. Keys are dispatched via imperative methods;
+// everything else is forwarded to the primitive's Update/Tick.
 func (m Housekeeping) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-
 	switch msg := msg.(type) {
-	case DetectionCompleteMsg:
-		if msg.Error != nil {
-			m.err = msg.Error
-			m.state = HKStateComplete
-			return m, nil
-		}
-		m.detected = msg.Detected
-		m.config = msg.Config
-
-		if len(m.detected) == 0 {
-			m.err = fmt.Errorf("no package managers detected")
-			m.state = HKStateComplete
-			return m, nil
-		}
-
-		// Initialize package items with all selected by default
-		m.packages = make([]PackageItem, len(m.detected))
-		for i, pkg := range m.detected {
-			m.packages[i] = PackageItem{
-				Package:  pkg,
-				Selected: true,
-			}
-		}
-
-		m.state = HKStatePackageSelect
-		return m, nil
-
-	case SuggestionsLoadedMsg:
-		if msg.Error != nil {
-			m.err = msg.Error
-			m.state = HKStateComplete
-			return m, nil
-		}
-		m.suggestions = msg.Suggestions
-		m.cursor = 0
-
-		if len(m.suggestions) == 0 {
-			m.err = fmt.Errorf("no suggestions for %s", msg.Category)
-			m.state = HKStateComplete
-			return m, nil
-		}
-
-		m.state = HKStateCommandSelect
-		return m, nil
-
-	case CommandsAddedMsg:
-		if msg.Error != nil {
-			m.err = msg.Error
-			m.state = HKStateComplete
-			return m, nil
-		}
-		m.addedCount += msg.Count
-
-		// Find next selected category
-		m.currentCategory++
-		for m.currentCategory < len(m.categories) && !m.categories[m.currentCategory].Selected {
-			m.currentCategory++
-		}
-
-		// If there are more categories to process, get suggestions for the next one
-		if m.currentCategory < len(m.categories) {
-			return m, m.getSuggestions()
-		}
-
-		// All categories processed
-		m.state = HKStateComplete
-		return m, nil
-
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.setup = m.setup.SetSize(msg.Width, msg.Height)
 		return m, nil
 
 	case tea.KeyMsg:
-		// Handle manual input state specially
-		if m.state == HKStateManualInput {
-			switch msg.String() {
-			case "esc":
-				// Cancel and go back to command select
-				m.state = HKStateCommandSelect
-				// Reset inputs
-				for i := range m.manualInputs {
-					m.manualInputs[i].SetValue("")
-				}
-				m.manualInputFocus = 0
-				m.manualInputs[0].Focus()
-				for i := 1; i < len(m.manualInputs); i++ {
-					m.manualInputs[i].Blur()
-				}
-				return m, nil
-			case "tab", "down":
-				// Move to next input
-				m.manualInputs[m.manualInputFocus].Blur()
-				m.manualInputFocus = (m.manualInputFocus + 1) % len(m.manualInputs)
-				m.manualInputs[m.manualInputFocus].Focus()
-				return m, nil
-			case "shift+tab", "up":
-				// Move to previous input
-				m.manualInputs[m.manualInputFocus].Blur()
-				m.manualInputFocus = (m.manualInputFocus - 1 + len(m.manualInputs)) % len(m.manualInputs)
-				m.manualInputs[m.manualInputFocus].Focus()
-				return m, nil
-			case "enter":
-				// Add the manual command
-				cmd := m.manualInputs[0].Value()
-				workingDir := m.manualInputs[1].Value()
-				desc := m.manualInputs[2].Value()
+		return m.handleKey(msg)
+	}
 
-				if cmd == "" {
-					m.err = fmt.Errorf("command cannot be empty")
-					m.state = HKStateComplete
-					return m, nil
-				}
-				if workingDir == "" {
-					workingDir = "."
-				}
-				if desc == "" {
-					desc = cmd
-				}
+	// Forward non-key messages to the primitive for async results + spinner
+	var cmd tea.Cmd
+	m.setup, cmd = m.setup.Tick(msg)
+	var cmd2 tea.Cmd
+	m.setup, cmd2 = m.setup.Update(msg)
+	return m, tea.Batch(cmd, cmd2)
+}
 
-				// Add to suggestions
-				m.suggestions = append(m.suggestions, SuggestionItem{
-					Command: housekeeping.Command{
-						Command:     cmd,
-						WorkingDir:  workingDir,
-						Description: desc,
-					},
-					Selected: true,
-				})
+func (m Housekeeping) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Quit
+	if key.Matches(msg, m.keys.Quit) {
+		return m, tea.Quit
+	}
 
-				// Reset inputs and go back
-				for i := range m.manualInputs {
-					m.manualInputs[i].SetValue("")
-				}
-				m.manualInputFocus = 0
-				m.manualInputs[0].Focus()
-				for i := 1; i < len(m.manualInputs); i++ {
-					m.manualInputs[i].Blur()
-				}
-				m.state = HKStateCommandSelect
-				return m, nil
-			default:
-				// Update the focused input
-				var cmd tea.Cmd
-				m.manualInputs[m.manualInputFocus], cmd = m.manualInputs[m.manualInputFocus].Update(msg)
-				return m, cmd
-			}
-		}
+	// Help toggle
+	if key.Matches(msg, m.keys.Help) {
+		m.showAll = !m.showAll
+		return m, nil
+	}
 
-		switch {
-		case key.Matches(msg, m.keys.Quit):
+	// Complete state: enter exits
+	if m.setup.Done() {
+		if key.Matches(msg, m.keys.Enter) {
 			return m, tea.Quit
+		}
+		return m, nil
+	}
 
-		case key.Matches(msg, m.keys.Help):
-			m.showAll = !m.showAll
+	state := m.setup.State()
+
+	// Manual input mode: form gets special key handling
+	if state == primitives.SetupManualInput {
+		switch msg.String() {
+		case "esc":
+			m.setup = m.setup.Back()
 			return m, nil
-
-		case key.Matches(msg, m.keys.Up):
-			if m.state == HKStatePackageSelect {
-				if m.packageCursor > 0 {
-					m.packageCursor--
-				}
-			} else if m.state == HKStateCategorySelect {
-				if m.categoryCursor > 0 {
-					m.categoryCursor--
-				}
-			} else if m.state == HKStateCommandSelect {
-				if m.cursor > 0 {
-					m.cursor--
-				}
-			}
-
-		case key.Matches(msg, m.keys.Down):
-			if m.state == HKStatePackageSelect {
-				if m.packageCursor < len(m.packages)-1 {
-					m.packageCursor++
-				}
-			} else if m.state == HKStateCategorySelect {
-				if m.categoryCursor < len(m.categories)-1 {
-					m.categoryCursor++
-				}
-			} else if m.state == HKStateCommandSelect {
-				if m.cursor < len(m.suggestions)-1 {
-					m.cursor++
-				}
-			}
-
-		case key.Matches(msg, m.keys.Select):
-			if m.state == HKStatePackageSelect {
-				m.packages[m.packageCursor].Selected = !m.packages[m.packageCursor].Selected
-			} else if m.state == HKStateCategorySelect {
-				m.categories[m.categoryCursor].Selected = !m.categories[m.categoryCursor].Selected
-			} else if m.state == HKStateCommandSelect {
-				m.suggestions[m.cursor].Selected = !m.suggestions[m.cursor].Selected
-			}
-
-		case msg.String() == "i":
-			// Manual input mode - only in command select state
-			if m.state == HKStateCommandSelect {
-				m.state = HKStateManualInput
-				m.manualInputFocus = 0
-				m.manualInputs[0].Focus()
-				return m, nil
-			}
-
-		case key.Matches(msg, m.keys.Enter):
-			switch m.state {
-			case HKStatePackageSelect:
-				// Check if any packages are selected
-				hasSelected := false
-				for _, pkg := range m.packages {
-					if pkg.Selected {
-						hasSelected = true
-						break
-					}
-				}
-
-				if !hasSelected {
-					m.err = fmt.Errorf("no packages selected")
-					m.state = HKStateComplete
-					return m, nil
-				}
-
-				m.state = HKStateCategorySelect
-				return m, nil
-
-			case HKStateCategorySelect:
-				// Check if any categories are selected
-				hasSelected := false
-				for i, cat := range m.categories {
-					if cat.Selected {
-						hasSelected = true
-						m.currentCategory = i
-						break
-					}
-				}
-
-				if !hasSelected {
-					m.err = fmt.Errorf("no categories selected")
-					m.state = HKStateComplete
-					return m, nil
-				}
-
-				return m, m.getSuggestions()
-
-			case HKStateCommandSelect:
-				// Check if any commands are selected
-				hasSelected := false
-				for _, item := range m.suggestions {
-					if item.Selected {
-						hasSelected = true
-						break
-					}
-				}
-
-				if !hasSelected {
-					m.err = fmt.Errorf("no commands selected")
-					m.state = HKStateComplete
-					return m, nil
-				}
-
-				m.state = HKStateConfirm
-				return m, nil
-
-			case HKStateConfirm:
-				m.state = HKStateExecute
-				return m, tea.Batch(m.spinner.Tick, m.addSelectedCommands())
-
-			case HKStateComplete:
-				return m, tea.Quit
-			}
+		case "tab", "down":
+			m.setup = m.setup.FormNextField()
+			return m, nil
+		case "shift+tab", "up":
+			m.setup = m.setup.FormPrevField()
+			return m, nil
+		case "enter":
+			var cmd tea.Cmd
+			m.setup, cmd = m.setup.Submit()
+			return m, cmd
+		default:
+			var cmd tea.Cmd
+			m.setup, cmd = m.setup.UpdateInput(msg)
+			return m, cmd
 		}
 	}
 
-	// Update spinner when in detecting or execute state
-	if m.state == HKStateDetecting || m.state == HKStateExecute {
-		m.spinner, cmd = m.spinner.Update(msg)
+	// Normal navigation
+	switch {
+	case key.Matches(msg, m.keys.Up):
+		m.setup = m.setup.CursorUp()
+	case key.Matches(msg, m.keys.Down):
+		m.setup = m.setup.CursorDown()
+	case key.Matches(msg, m.keys.Select):
+		m.setup = m.setup.Toggle()
+	case msg.String() == "i":
+		m.setup = m.setup.EnterManualInput()
+	case key.Matches(msg, m.keys.Enter):
+		var cmd tea.Cmd
+		m.setup, cmd = m.setup.Submit()
 		return m, cmd
 	}
 
 	return m, nil
 }
 
-// View renders the model
+// View renders the setup wizard with carya's help bar.
 func (m Housekeeping) View() string {
-	var content string
+	content := m.setup.View()
 
-	switch m.state {
-	case HKStateDetecting:
-		title := tui.TitleStyle.Render(tui.IconSettings + " HOUSEKEEPING SETUP")
-
-		detectingText := tui.TextStyle.Render("Detecting package managers and build systems...")
-
-		box := tui.BoxStyle.Width(60).Render(
-			lipgloss.JoinVertical(lipgloss.Left,
-				m.spinner.View()+" "+detectingText,
-			),
-		)
-
-		content = lipgloss.JoinVertical(lipgloss.Left, title, "", box)
-
-	case HKStatePackageSelect:
-		title := tui.TitleStyle.Render(tui.IconCheck + " DETECTED PACKAGES")
-
-		packageTitle := tui.HeaderStyle.Margin(0, 0, tui.ComponentGap, 0).Render("Select which package managers to use:")
-
-		// Show package selection
-		var options []string
-		for i, pkgItem := range m.packages {
-			cursor := "  "
-			if m.packageCursor == i {
-				cursor = tui.IconCursor + " "
-			}
-
-			checkbox := tui.IconCheckbox
-			if pkgItem.Selected {
-				checkbox = tui.IconChecked
-			}
-
-			line := cursor + checkbox + " " + pkgItem.Package.Type.Description
-			if m.packageCursor == i {
-				line = tui.SelectedItemStyle.Render(line)
-			} else {
-				line = tui.ItemStyle.Render(line)
-			}
-			options = append(options, line)
-		}
-
-		packagesBox := tui.BoxStyle.Width(60).Render(
-			lipgloss.JoinVertical(lipgloss.Left, options...),
-		)
-
-		instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
-
-		content = lipgloss.JoinVertical(lipgloss.Left, title, "", packageTitle, packagesBox, instructions)
-
-	case HKStateCategorySelect:
-		title := tui.TitleStyle.Render(tui.IconCheck + " SELECTED PACKAGES")
-
-		// Show selected packages in a box
-		var selectedList []string
-		for _, pkgItem := range m.packages {
-			if pkgItem.Selected {
-				selectedList = append(selectedList, tui.SubtleTextStyle.Render("  "+tui.IconBullet)+" "+tui.TextStyle.Render(pkgItem.Package.Type.Description))
-			}
-		}
-
-		packagesBox := tui.DimBoxStyle.Width(60).Render(
-			lipgloss.JoinVertical(lipgloss.Left, selectedList...),
-		)
-
-		// Show category selection
-		categoryTitle := tui.HeaderStyle.Margin(tui.SectionGap, 0, tui.ComponentGap, 0).Render("Select categories to configure:")
-
-		var options []string
-		for i, category := range m.categories {
-			cursor := "  "
-			if m.categoryCursor == i {
-				cursor = tui.IconCursor + " "
-			}
-
-			checkbox := tui.IconCheckbox
-			if category.Selected {
-				checkbox = tui.IconChecked
-			}
-
-			line := cursor + checkbox + " " + category.Name
-			if m.categoryCursor == i {
-				line = tui.SelectedItemStyle.Render(line)
-			} else {
-				line = tui.ItemStyle.Render(line)
-			}
-			options = append(options, line)
-		}
-
-		optionsBox := tui.BoxStyle.Width(60).Render(
-			lipgloss.JoinVertical(lipgloss.Left, options...),
-		)
-
-		instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
-
-		content = lipgloss.JoinVertical(lipgloss.Left, title, "", packagesBox, categoryTitle, optionsBox, instructions)
-
-	case HKStateCommandSelect:
-		currentCategoryName := m.categories[m.currentCategory].Name
-		title := tui.TitleStyle.Render(fmt.Sprintf(tui.IconSettings+" %s COMMANDS", strings.ToUpper(currentCategoryName)))
-
-		var options []string
-		for i, item := range m.suggestions {
-			cursor := "  "
-			if m.cursor == i {
-				cursor = tui.IconCursor + " "
-			}
-
-			checkbox := tui.IconCheckbox
-			if item.Selected {
-				checkbox = tui.IconChecked
-			}
-
-			line := cursor + checkbox + " " + item.Command.Description
-			cmdLine := "    " + item.Command.Command
-
-			if m.cursor == i {
-				line = tui.SelectedItemStyle.Render(line)
-				cmdLine = tui.SubtleTextStyle.Render(cmdLine)
-			} else {
-				line = tui.ItemStyle.Render(line)
-				cmdLine = tui.HelpDescStyle.Render(cmdLine)
-			}
-
-			options = append(options, line)
-			options = append(options, cmdLine)
-			if i < len(m.suggestions)-1 {
-				options = append(options, "")
-			}
-		}
-
-		commandsBox := tui.ActiveBoxStyle.Width(70).Render(
-			lipgloss.JoinVertical(lipgloss.Left, options...),
-		)
-
-		instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("↑/↓ navigate • x toggle • i add manual • enter continue")
-
-		content = lipgloss.JoinVertical(lipgloss.Left, title, "", commandsBox, instructions)
-
-	case HKStateManualInput:
-		currentCategoryName := m.categories[m.currentCategory].Name
-		title := tui.TitleStyle.Render(fmt.Sprintf(tui.IconSettings+" ADD MANUAL COMMAND (%s)", strings.ToUpper(currentCategoryName)))
-
-		formTitle := tui.HeaderStyle.Margin(0, 0, tui.ComponentGap, 0).Render("Enter command details:")
-
-		// Build the form
-		var formFields []string
-
-		labels := []string{"Command:", "Working Directory:", "Description:"}
-		for i, input := range m.manualInputs {
-			label := labels[i]
-			if i == m.manualInputFocus {
-				label = tui.SelectedItemStyle.Render(label)
-			} else {
-				label = tui.TextStyle.Render(label)
-			}
-			formFields = append(formFields, label)
-			formFields = append(formFields, "  "+input.View())
-			if i < len(m.manualInputs)-1 {
-				formFields = append(formFields, "")
-			}
-		}
-
-		formBox := tui.BoxStyle.Width(70).Render(
-			lipgloss.JoinVertical(lipgloss.Left, formFields...),
-		)
-
-		instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("tab/↑/↓ navigate fields • enter submit • esc cancel")
-
-		content = lipgloss.JoinVertical(lipgloss.Left, title, "", formTitle, formBox, instructions)
-
-	case HKStateConfirm:
-		title := tui.TitleStyle.Render(tui.IconCheck + " CONFIRM SELECTION")
-
-		// Count selected
-		selectedCount := 0
-		var selectedList []string
-		for _, item := range m.suggestions {
-			if item.Selected {
-				selectedCount++
-				selectedList = append(selectedList, tui.SubtleTextStyle.Render("  "+tui.IconBullet)+" "+tui.TextStyle.Render(item.Command.Description))
-			}
-		}
-
-		currentCategoryName := m.categories[m.currentCategory].Name
-		countHeader := tui.HeaderStyle.Render(fmt.Sprintf("Ready to add %d %s commands:", selectedCount, currentCategoryName))
-
-		summaryBox := tui.BoxStyle.Width(70).Render(
-			lipgloss.JoinVertical(lipgloss.Left, selectedList...),
-		)
-
-		instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("enter confirm • q cancel")
-
-		content = lipgloss.JoinVertical(lipgloss.Left, title, "", countHeader, "", summaryBox, instructions)
-
-	case HKStateExecute:
-		title := tui.TitleStyle.Render(tui.IconSettings + " PROCESSING")
-
-		executionText := tui.TextStyle.Render("Adding selected commands to configuration...")
-
-		box := tui.BoxStyle.Width(60).Render(
-			lipgloss.JoinVertical(lipgloss.Left,
-				m.spinner.View()+" "+executionText,
-			),
-		)
-
-		content = lipgloss.JoinVertical(lipgloss.Left, title, "", box)
-
-	case HKStateComplete:
-		if m.err != nil {
-			title := tui.ErrorStyle.Render(tui.IconCross + " ERROR")
-			errorMsg := tui.ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
-
-			errorBox := lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(tui.ColorError).
-				Padding(tui.DefaultPadding, tui.DefaultPadding*2).
-				Width(60).
-				Render(errorMsg)
-
-			instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("enter exit")
-			content = lipgloss.JoinVertical(lipgloss.Left, title, "", errorBox, instructions)
-		} else {
-			title := tui.SuccessStyle.Render(tui.IconCheck + " COMPLETE")
-
-			// Count how many categories were selected
-			selectedCategories := []string{}
-			for _, cat := range m.categories {
-				if cat.Selected {
-					selectedCategories = append(selectedCategories, cat.Name)
-				}
-			}
-
-			categoryText := strings.Join(selectedCategories, " and ")
-			successMsg := tui.SuccessStyle.Render(fmt.Sprintf("Successfully added %d commands for %s!", m.addedCount, categoryText))
-
-			successBox := lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(tui.ColorSuccess).
-				Padding(tui.DefaultPadding, tui.DefaultPadding*2).
-				Width(60).
-				Render(successMsg)
-
-			instructions := tui.HelpDescStyle.Margin(tui.ComponentGap, 0, 0, 0).Render("enter exit")
-			content = lipgloss.JoinVertical(lipgloss.Left, title, "", successBox, instructions)
-		}
-	}
-
-	// Add help view at the bottom
 	m.help.ShowAll = m.showAll
 	helpView := m.help.View(m.keys)
 	helpText := tui.HelpStyle.Render(helpView)
 
-	return lipgloss.JoinVertical(lipgloss.Left, content, helpText)
+	return content + "\n" + helpText
 }
