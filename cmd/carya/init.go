@@ -39,8 +39,8 @@ var initCmd = &cobra.Command{
 				}
 			}
 
-			// Start the daemon if featcom is enabled
-			if initModel.IsFeatureEnabled("featcom") {
+			// Start the daemon if featcom is enabled and initialized successfully
+			if initModel.IsFeatureEnabled("featcom") && !initModel.HasFeatureError("featcom") {
 				fmt.Println("\nStarting Carya daemon...")
 
 				repo, err := repository.New()

@@ -1,0 +1,357 @@
+// Package git provides git plumbing operations for Carya's shadow repository system.
+package git
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+)
+
+// ShadowRepo manages the shadow git repository stored in .carya/shadow/
+// All methods are serialized via an internal mutex to prevent concurrent
+// git commands from racing on the index (which causes index.lock errors).
+type ShadowRepo struct {
+	mu       sync.Mutex
+	gitDir   string // Path to .carya/shadow/
+	workTree string // Path to repo root
+}
+
+// NewShadowRepo creates a new ShadowRepo instance.
+func NewShadowRepo(caryaPath, workTree string) *ShadowRepo {
+	return &ShadowRepo{
+		gitDir:   filepath.Join(caryaPath, "shadow"),
+		workTree: workTree,
+	}
+}
+
+func (s *ShadowRepo) Initialize() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := os.Stat(s.gitDir); err != nil {
+		if err := os.MkdirAll(s.gitDir, 0755); err != nil {
+			return fmt.Errorf("failed to create shadow directory: %w", err)
+		}
+
+		cmd := exec.Command("git", "init", "--bare")
+		cmd.Dir = s.gitDir
+		cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to initialize shadow repo: %w\nOutput: %s", err, output)
+		}
+	}
+
+	return s.ensureAlternates()
+}
+
+// ensureAlternates bridges the shadow and main repo object stores so each can
+// resolve the other's objects (needed for merge-tree, diff-tree, and index seeding).
+func (s *ShadowRepo) ensureAlternates() error {
+	mainObjects := filepath.Join(s.workTree, ".git", "objects")
+	shadowObjects := filepath.Join(s.gitDir, "objects")
+
+	if err := appendAlternate(filepath.Join(shadowObjects, "info", "alternates"), mainObjects); err != nil {
+		return fmt.Errorf("failed to set shadow alternates: %w", err)
+	}
+	if err := appendAlternate(filepath.Join(mainObjects, "info", "alternates"), shadowObjects); err != nil {
+		return fmt.Errorf("failed to set main alternates: %w", err)
+	}
+	return nil
+}
+
+func appendAlternate(altFile, targetPath string) error {
+	if err := os.MkdirAll(filepath.Dir(altFile), 0755); err != nil {
+		return err
+	}
+
+	existing, _ := os.ReadFile(altFile)
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(line) == targetPath {
+			return nil
+		}
+	}
+
+	f, err := os.OpenFile(altFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintln(f, targetPath)
+	return err
+}
+
+func (s *ShadowRepo) SeedIndexFromMainHEAD() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cmd := exec.Command("git", "rev-parse", "HEAD^{tree}")
+	cmd.Dir = s.workTree
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to get HEAD tree: %w", err)
+	}
+	return s.readTree(strings.TrimSpace(string(output)))
+}
+
+// GetIndexEntry returns the blob hash for a file in the shadow index,
+// or empty string if the file is not tracked.
+func (s *ShadowRepo) GetIndexEntry(path string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cmd := exec.Command("git", "ls-files", "--cached", "-s", "--", path)
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", nil
+	}
+
+	line := strings.TrimSpace(string(output))
+	if line == "" {
+		return "", nil
+	}
+
+	// format: <mode> <hash> <stage>\t<path>
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return "", nil
+	}
+	return fields[1], nil
+}
+
+// GitDir returns the path to the shadow git directory.
+func (s *ShadowRepo) GitDir() string {
+	return s.gitDir
+}
+
+// HashObject stores content as a git blob and returns its hash.
+func (s *ShadowRepo) HashObject(content []byte) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cmd := exec.Command("git", "hash-object", "-w", "--stdin")
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	cmd.Stdin = bytes.NewReader(content)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to hash object: %w", err)
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
+// GetObjectContent retrieves the content of a git blob by its hash.
+func (s *ShadowRepo) GetObjectContent(hash string) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cmd := exec.Command("git", "cat-file", "-p", hash)
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get object content: %w", err)
+	}
+
+	return output, nil
+}
+
+// UpdateIndex adds or updates an entry in the git index.
+func (s *ShadowRepo) UpdateIndex(path, blobHash, mode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cmd := exec.Command("git", "update-index", "--add", "--cacheinfo", fmt.Sprintf("%s,%s,%s", mode, blobHash, path))
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to update index: %w\nOutput: %s", err, output)
+	}
+
+	return nil
+}
+
+// RemoveFromIndex removes a file from the git index.
+func (s *ShadowRepo) RemoveFromIndex(path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cmd := exec.Command("git", "update-index", "--remove", path)
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+
+	// Ignore errors if file wasn't in index
+	cmd.Run()
+	return nil
+}
+
+// WriteTree writes the current index as a tree object and returns its hash.
+func (s *ShadowRepo) WriteTree() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cmd := exec.Command("git", "write-tree")
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to write tree: %w", err)
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
+// DiffBlobs generates a unified diff between two blobs.
+func (s *ShadowRepo) DiffBlobs(oldHash, newHash, path string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// If either hash is empty, handle creation/deletion
+	if oldHash == "" {
+		oldHash = "/dev/null"
+	}
+	if newHash == "" {
+		newHash = "/dev/null"
+	}
+
+	cmd := exec.Command("git", "diff", "--no-color", oldHash, newHash, "--", path)
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+
+	output, err := cmd.Output()
+	if err != nil {
+		// git diff returns exit code 1 when there are differences, which is normal
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return string(output), nil
+		}
+		return "", fmt.Errorf("failed to diff blobs: %w", err)
+	}
+
+	return string(output), nil
+}
+
+// DiffBlobsRaw generates a diff between two blobs using the raw blob hashes.
+func (s *ShadowRepo) DiffBlobsRaw(oldHash, newHash string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if oldHash == "" || newHash == "" {
+		return "", fmt.Errorf("both hashes must be provided")
+	}
+
+	cmd := exec.Command("git", "diff", "--no-color", oldHash, newHash)
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+
+	output, err := cmd.Output()
+	if err != nil {
+		// git diff returns exit code 1 when there are differences
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return string(output), nil
+		}
+		return "", fmt.Errorf("failed to diff blobs: %w", err)
+	}
+
+	return string(output), nil
+}
+
+// ObjectExists checks if a git object exists.
+func (s *ShadowRepo) ObjectExists(hash string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cmd := exec.Command("git", "cat-file", "-e", hash)
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	return cmd.Run() == nil
+}
+
+// ReadTree reads a tree object into the index.
+func (s *ShadowRepo) ReadTree(treeHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.readTree(treeHash)
+}
+
+func (s *ShadowRepo) readTree(treeHash string) error {
+	cmd := exec.Command("git", "read-tree", treeHash)
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to read tree: %w\nOutput: %s", err, output)
+	}
+
+	return nil
+}
+
+// CheckoutTree checks out a tree to the working directory.
+func (s *ShadowRepo) CheckoutTree(treeHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// First read the tree into index
+	if err := s.readTree(treeHash); err != nil {
+		return err
+	}
+
+	// Then checkout the index
+	cmd := exec.Command("git", "checkout-index", "-a", "-f")
+	cmd.Dir = s.workTree
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir, "GIT_WORK_TREE="+s.workTree)
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to checkout tree: %w\nOutput: %s", err, output)
+	}
+
+	return nil
+}
+
+// ListTree lists the contents of a tree object.
+func (s *ShadowRepo) ListTree(treeHash string) ([]TreeEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cmd := exec.Command("git", "ls-tree", "-r", treeHash)
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tree: %w", err)
+	}
+
+	var entries []TreeEntry
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		// Format: <mode> <type> <hash>\t<path>
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		metaParts := strings.Fields(parts[0])
+		if len(metaParts) != 3 {
+			continue
+		}
+		entries = append(entries, TreeEntry{
+			Mode: metaParts[0],
+			Type: metaParts[1],
+			Hash: metaParts[2],
+			Path: parts[1],
+		})
+	}
+
+	return entries, nil
+}
+
+// TreeEntry represents an entry in a git tree.
+type TreeEntry struct {
+	Mode string
+	Type string
+	Hash string
+	Path string
+}

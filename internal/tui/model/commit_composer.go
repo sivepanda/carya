@@ -150,16 +150,22 @@ func (m *CommitComposer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateConfirming(msg)
 	case StatusWarning:
 		return m.updateWarning(msg)
-	case StatusCommitting, StatusDone, StatusError:
-		// For these states, just handle quit
+	case StatusDone, StatusError:
+		if msg, ok := msg.(tea.KeyMsg); ok {
+			if key.Matches(msg, m.keys.Quit) || msg.String() == "enter" {
+				return m, tea.Quit
+			}
+		}
+	case StatusCommitting:
 		if msg, ok := msg.(tea.KeyMsg); ok {
 			if key.Matches(msg, m.keys.Quit) {
 				return m, tea.Quit
 			}
-			if msg.String() == "enter" && (m.status == StatusDone || m.status == StatusError) {
-				return m, tea.Quit
-			}
 		}
+		// Keep spinner animating
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -216,8 +222,15 @@ func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case msg.String() == "enter":
-			// Only proceed if at least one chunk is selected
-			if len(m.selectedChunks) > 0 {
+			// Only proceed if at least one chunk is actually selected
+			hasSelected := false
+			for _, selected := range m.selectedChunks {
+				if selected {
+					hasSelected = true
+					break
+				}
+			}
+			if hasSelected {
 				m.status = StatusEditing
 				m.commitMsg.Focus()
 				return m, textinput.Blink

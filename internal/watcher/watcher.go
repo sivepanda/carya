@@ -159,7 +159,6 @@ func (w *Watcher) matchesRule(path, rule string, isDir bool) bool {
 // handleEvent processes a file system event and triggers appropriate actions.
 func (w *Watcher) handleEvent(event fsnotify.Event) {
 	if event.Op&(fsnotify.Write|fsnotify.Create) != 0 {
-		log.Print("test")
 		fi, err := os.Stat(event.Name)
 		if err != nil {
 			return

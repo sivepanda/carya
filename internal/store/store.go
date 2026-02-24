@@ -41,13 +41,42 @@ func (s *SQLiteStore) initTables() error {
 			end_time TIMESTAMP NOT NULL,
 			hash TEXT NOT NULL,
 			manual BOOLEAN NOT NULL,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			initial_blob_hash TEXT,
+			final_blob_hash TEXT,
+			tree_hash TEXT
 		);
 		CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON chunks(file_path);
 		CREATE INDEX IF NOT EXISTS idx_chunks_created_at ON chunks(created_at);
+		CREATE INDEX IF NOT EXISTS idx_chunks_tree_hash ON chunks(tree_hash);
 	`
 	_, err := s.db.Exec(query)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Run migrations for existing databases
+	return s.runMigrations()
+}
+
+// runMigrations adds new columns to existing tables if they don't exist.
+func (s *SQLiteStore) runMigrations() error {
+	// Check if columns exist and add them if not
+	migrations := []string{
+		"ALTER TABLE chunks ADD COLUMN initial_blob_hash TEXT",
+		"ALTER TABLE chunks ADD COLUMN final_blob_hash TEXT",
+		"ALTER TABLE chunks ADD COLUMN tree_hash TEXT",
+	}
+
+	for _, migration := range migrations {
+		// SQLite will error if column already exists, which is fine
+		s.db.Exec(migration)
+	}
+
+	// Ensure index exists
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_chunks_tree_hash ON chunks(tree_hash)")
+
+	return nil
 }
 
 // SaveChunk persists a chunk to the SQLite database, replacing any existing chunk with the same ID.
@@ -111,58 +140,4 @@ func (s *SQLiteStore) scanChunks(rows *sql.Rows) ([]chunk.Chunk, error) {
 // Close closes the SQLite database connection.
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
-}
-
-// JSONStore provides in-memory storage for chunks with JSON persistence capability.
-// Note: This implementation currently doesn't persist to disk.
-type JSONStore struct {
-	filePath string        // Path where JSON data would be persisted
-	chunks   []chunk.Chunk // In-memory chunk storage
-}
-
-// NewJSONStore creates a new JSON-based chunk store with the specified file path.
-func NewJSONStore(filePath string) *JSONStore {
-	return &JSONStore{
-		filePath: filePath,
-		chunks:   make([]chunk.Chunk, 0),
-	}
-}
-
-// SaveChunk adds or updates a chunk in the in-memory store.
-// If a chunk with the same ID exists, it will be replaced.
-func (s *JSONStore) SaveChunk(c chunk.Chunk) error {
-	for i, existing := range s.chunks {
-		if existing.ID == c.ID {
-			s.chunks[i] = c
-			return s.persist()
-		}
-	}
-	s.chunks = append(s.chunks, c)
-	return s.persist()
-}
-
-// FindChunks retrieves all chunks for a specific file path from the in-memory store.
-func (s *JSONStore) FindChunks(filePath string) ([]chunk.Chunk, error) {
-	var result []chunk.Chunk
-	for _, c := range s.chunks {
-		if c.FilePath == filePath {
-			result = append(result, c)
-		}
-	}
-	return result, nil
-}
-
-// GetRecentChunks retrieves the most recently added chunks up to the specified limit.
-func (s *JSONStore) GetRecentChunks(limit int) ([]chunk.Chunk, error) {
-	if limit > len(s.chunks) {
-		limit = len(s.chunks)
-	}
-	result := make([]chunk.Chunk, limit)
-	copy(result, s.chunks[len(s.chunks)-limit:])
-	return result, nil
-}
-
-// persist would write the chunks to disk as JSON. Currently a no-op.
-func (s *JSONStore) persist() error {
-	return nil
 }

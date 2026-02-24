@@ -1,9 +1,11 @@
 package repository
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Repository represents a Carya repository
@@ -67,4 +69,57 @@ func (r *Repository) LogPath() string {
 // StatusPath returns the path to the daemon status file
 func (r *Repository) StatusPath() string {
 	return filepath.Join(r.caryaPath, "status.json")
+}
+
+// ShadowPath returns the path to the shadow git repository
+func (r *Repository) ShadowPath() string {
+	return filepath.Join(r.caryaPath, "shadow")
+}
+
+// UserIDPath returns the path to the user identity file
+func (r *Repository) UserIDPath() string {
+	return filepath.Join(r.caryaPath, "user-id")
+}
+
+// EnsureGitignore ensures .carya/ is listed in the .gitignore file.
+func (r *Repository) EnsureGitignore() error {
+	gitignorePath := filepath.Join(r.rootPath, ".gitignore")
+	caryaEntry := ".carya/"
+
+	content := ""
+	if data, err := os.ReadFile(gitignorePath); err == nil {
+		content = string(data)
+
+		scanner := bufio.NewScanner(strings.NewReader(content))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == caryaEntry || line == ".carya" {
+				return nil
+			}
+		}
+	}
+
+	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open .gitignore: %w", err)
+	}
+	defer f.Close()
+
+	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+		if _, err := f.WriteString("\n"); err != nil {
+			return fmt.Errorf("failed to write to .gitignore: %w", err)
+		}
+	}
+
+	if len(content) == 0 {
+		if _, err := f.WriteString("# Carya directory\n"); err != nil {
+			return fmt.Errorf("failed to write to .gitignore: %w", err)
+		}
+	}
+
+	if _, err := f.WriteString(caryaEntry + "\n"); err != nil {
+		return fmt.Errorf("failed to write to .gitignore: %w", err)
+	}
+
+	return nil
 }

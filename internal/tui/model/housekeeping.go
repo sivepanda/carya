@@ -1,12 +1,11 @@
 package model
 
 import (
-	"bufio"
 	"carya/internal/housekeeping"
+	"carya/internal/repository"
 	"carya/internal/tui"
 	"carya/internal/tui/shared"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -31,8 +30,9 @@ const (
 
 // SuggestionItem represents a command suggestion with selection state
 type SuggestionItem struct {
-	Command  housekeeping.Command
-	Selected bool
+	Command      housekeeping.Command
+	TriggerFiles []string // Files that trigger this command (from package detect files)
+	Selected     bool
 }
 
 // CategoryItem represents a category with selection state
@@ -122,64 +122,18 @@ func (m Housekeeping) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, m.detectPackages())
 }
 
-// ensureCaryaDirectory creates .carya directory and adds it to .gitignore if needed
-func ensureCaryaDirectory() error {
-	// Create .carya directory
-	caryaDir := ".carya"
-	if err := os.MkdirAll(caryaDir, 0755); err != nil {
-		return fmt.Errorf("failed to create .carya directory: %w", err)
-	}
-
-	// Ensure .carya/ is in .gitignore
-	gitignorePath := ".gitignore"
-	caryaEntry := ".carya/"
-
-	// Check if .gitignore exists and if .carya/ is already in it
-	content := ""
-	if data, err := os.ReadFile(gitignorePath); err == nil {
-		content = string(data)
-
-		// Check if .carya/ is already in .gitignore
-		scanner := bufio.NewScanner(strings.NewReader(content))
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == caryaEntry || line == ".carya" {
-				// Already present
-				return nil
-			}
-		}
-	}
-
-	// Add .carya/ to .gitignore
-	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		// Don't fail if we can't update .gitignore
-		return nil
-	}
-	defer f.Close()
-
-	// Add newline before entry if file doesn't end with one
-	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
-		f.WriteString("\n")
-	}
-
-	// Add comment and entry
-	if len(content) == 0 {
-		f.WriteString("# Carya directory\n")
-	}
-
-	f.WriteString(caryaEntry + "\n")
-
-	return nil
-}
-
 // detectPackages runs package detection
 func (m Housekeeping) detectPackages() tea.Cmd {
 	return func() tea.Msg {
-		// Ensure .carya directory exists first
-		if err := ensureCaryaDirectory(); err != nil {
+		// Ensure .carya directory exists and is gitignored
+		repo, err := repository.New()
+		if err != nil {
 			return DetectionCompleteMsg{Error: err}
 		}
+		if err := repo.EnsureExists(); err != nil {
+			return DetectionCompleteMsg{Error: err}
+		}
+		_ = repo.EnsureGitignore()
 
 		detected, err := m.detector.DetectPackages()
 		if err != nil {
@@ -204,26 +158,33 @@ func (m Housekeeping) getSuggestions() tea.Cmd {
 	return func() tea.Msg {
 		categoryName := m.categories[m.currentCategory].Name
 
-		// Get suggestions only from selected packages
-		var suggestions []housekeeping.Command
+		// Get suggestions only from selected packages, carrying trigger files
+		var items []SuggestionItem
 		for _, pkgItem := range m.packages {
-			if pkgItem.Selected {
-				for _, pkgType := range housekeeping.PackageTypes {
-					if pkgType.Name == pkgItem.Package.Type.Name {
-						if commands, exists := pkgType.Commands[categoryName]; exists {
-							suggestions = append(suggestions, commands...)
-						}
-						break
+			if !pkgItem.Selected {
+				continue
+			}
+			for _, pkgType := range housekeeping.PackageTypes {
+				if pkgType.Name != pkgItem.Package.Type.Name {
+					continue
+				}
+				// Collect trigger files from the package type
+				var triggerFiles []string
+				if pkgType.DetectFile != "" {
+					triggerFiles = append(triggerFiles, pkgType.DetectFile)
+				}
+				triggerFiles = append(triggerFiles, pkgType.DetectFiles...)
+
+				if commands, exists := pkgType.Commands[categoryName]; exists {
+					for _, cmd := range commands {
+						items = append(items, SuggestionItem{
+							Command:      cmd,
+							TriggerFiles: triggerFiles,
+							Selected:     true,
+						})
 					}
 				}
-			}
-		}
-
-		items := make([]SuggestionItem, len(suggestions))
-		for i, cmd := range suggestions {
-			items[i] = SuggestionItem{
-				Command:  cmd,
-				Selected: true, // Default to all selected
+				break
 			}
 		}
 
@@ -242,12 +203,13 @@ func (m Housekeeping) addSelectedCommands() tea.Cmd {
 		count := 0
 		for _, item := range m.suggestions {
 			if item.Selected {
-				err := m.config.AddCommand(
-					categoryName,
-					item.Command.Command,
-					item.Command.WorkingDir,
-					item.Command.Description,
-				)
+				cmd := housekeeping.Command{
+					Command:      item.Command.Command,
+					WorkingDir:   item.Command.WorkingDir,
+					Description:  item.Command.Description,
+					TriggerFiles: item.TriggerFiles,
+				}
+				err := m.config.AddCommand(categoryName, cmd)
 				if err != nil {
 					return CommandsAddedMsg{Error: err}
 				}

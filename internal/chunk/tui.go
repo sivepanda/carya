@@ -1,20 +1,21 @@
 package chunk
 
 import (
+	"carya/internal/tui"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
 var (
-	addedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff87")).Bold(false)
-	removedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff5f87")).Bold(false)
-	contextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#cccccc"))
-	headerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#87d7ff")).Bold(true)
-	rangeStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffaf5f")).Bold(true)
-	subtleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
-	binaryStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffaf5f")).Bold(true)
-	infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+	addedStyle   = lipgloss.NewStyle().Foreground(tui.ColorSuccess)
+	removedStyle = lipgloss.NewStyle().Foreground(tui.ColorError)
+	contextStyle = lipgloss.NewStyle().Foreground(tui.ColorPrimary)
+	headerStyle  = lipgloss.NewStyle().Foreground(tui.ColorTitle).Bold(true)
+	rangeStyle   = lipgloss.NewStyle().Foreground(tui.ColorWarning).Bold(true)
+	subtleStyle  = lipgloss.NewStyle().Foreground(tui.ColorTertiary)
+	binaryStyle  = lipgloss.NewStyle().Foreground(tui.ColorWarning).Bold(true)
+	infoStyle    = lipgloss.NewStyle().Foreground(tui.ColorSecondary)
 )
 
 func FormatDiff(diff string) string {

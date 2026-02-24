@@ -25,9 +25,14 @@ func (ef *EngineFeature) Description() string {
 	return "Main engine for chunk management and storage"
 }
 
-// Initialize sets up the engine
+// Initialize sets up the engine with shadow repository support
 func (ef *EngineFeature) Initialize(repo *repository.Repository) error {
-	eng, err := engine.NewEngine(repo.DBPath())
+	eng, err := engine.NewEngineWithShadow(
+		repo.DBPath(),
+		repo.ShadowPath(),
+		repo.RootPath(),
+		repo.CaryaPath(),
+	)
 	if err != nil {
 		return err
 	}

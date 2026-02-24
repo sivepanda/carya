@@ -60,21 +60,24 @@ var checkoutCmd = &cobra.Command{
 	},
 }
 
-// checkoutBranch executes git checkout and returns whether housekeeping.json was changed and the list of changed files
+// checkoutBranch executes git checkout and returns whether carya.json was changed and the list of changed files
 func checkoutBranch(branch string) (bool, []string, error) {
+	configPath, err := housekeeping.GetConfigPath()
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to get config path: %w", err)
+	}
+
 	wd, err := os.Getwd()
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	caryaDir := filepath.Join(wd, ".carya")
-	housekeepingPath := filepath.Join(caryaDir, "housekeeping.json")
-	relPath, err := filepath.Rel(wd, housekeepingPath)
+	relPath, err := filepath.Rel(wd, configPath)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to get relative path: %w", err)
 	}
 
-	// Get the hash of housekeeping.json before checkout
+	// Get the hash of carya.json before checkout
 	beforeHash, _ := getFileHash(relPath)
 
 	// Get the current HEAD commit before checkout
@@ -94,7 +97,7 @@ func checkoutBranch(branch string) (bool, []string, error) {
 		return false, nil, fmt.Errorf("git checkout failed: %w", err)
 	}
 
-	// Get the hash of housekeeping.json after checkout
+	// Get the hash of carya.json after checkout
 	afterHash, _ := getFileHash(relPath)
 
 	// Check if the file changed
