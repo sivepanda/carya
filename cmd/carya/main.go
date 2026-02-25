@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sivepanda/mycelia"
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +29,10 @@ func Execute() {
 }
 
 // main is the entry point for the Carya CLI application.
+func init() {
+	mycelia.ConfigFile = "carya.json"
+}
+
 func main() {
 	Execute()
 }
