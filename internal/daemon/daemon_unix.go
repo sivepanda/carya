@@ -4,6 +4,7 @@ package daemon
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"syscall"
@@ -18,6 +19,7 @@ func startProcess(cmd *exec.Cmd, logFile *os.File) error {
 	}
 
 	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to start daemon: %v", err)
 		return fmt.Errorf("failed to start daemon: %w", err)
 	}
 
@@ -43,11 +45,13 @@ func isProcessRunning(pid int) bool {
 func stopProcess(pid int) error {
 	process, err := os.FindProcess(pid)
 	if err != nil {
+		log.Printf("Failed to find process: %v", err)
 		return fmt.Errorf("failed to find process: %w", err)
 	}
 
 	// Send SIGTERM
 	if err := process.Signal(syscall.SIGTERM); err != nil {
+		log.Printf("Failed to stop daemon: %v", err)
 		return fmt.Errorf("failed to stop daemon: %w", err)
 	}
 

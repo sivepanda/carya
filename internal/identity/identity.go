@@ -3,6 +3,7 @@ package identity
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,6 +64,7 @@ func (u *UserIdentity) GetOrCreate() (string, error) {
 
 	// Save the ID
 	if err := u.Save(userID); err != nil {
+		log.Printf("Failed to save user ID: %v", err)
 		return "", fmt.Errorf("failed to save user ID: %w", err)
 	}
 
@@ -74,13 +76,16 @@ func (u *UserIdentity) Get() (string, error) {
 	data, err := os.ReadFile(u.idPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			log.Printf("User ID not set, run 'carya init' first")
 			return "", fmt.Errorf("user ID not set, run 'carya init' first")
 		}
+		log.Printf("Failed to read user ID: %v", err)
 		return "", fmt.Errorf("failed to read user ID: %w", err)
 	}
 
 	id := strings.TrimSpace(string(data))
 	if id == "" {
+		log.Printf("User ID file is empty")
 		return "", fmt.Errorf("user ID file is empty")
 	}
 
@@ -91,10 +96,12 @@ func (u *UserIdentity) Get() (string, error) {
 func (u *UserIdentity) Save(userID string) error {
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(u.idPath), 0755); err != nil {
+		log.Printf("Failed to create directory: %v", err)
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	if err := os.WriteFile(u.idPath, []byte(userID+"\n"), 0644); err != nil {
+		log.Printf("Failed to write user ID: %v", err)
 		return fmt.Errorf("failed to write user ID: %w", err)
 	}
 
@@ -149,16 +156,19 @@ func sanitizeUserID(name string) string {
 // ValidateUserID checks if a user ID is valid.
 func ValidateUserID(id string) error {
 	if id == "" {
+		log.Printf("User ID cannot be empty")
 		return fmt.Errorf("user ID cannot be empty")
 	}
 
 	if len(id) > 32 {
+		log.Printf("User ID too long (max 32 characters)")
 		return fmt.Errorf("user ID too long (max 32 characters)")
 	}
 
 	// Must match: lowercase alphanumeric with hyphens and underscores
 	valid := regexp.MustCompile(`^[a-z0-9][a-z0-9\-_]*[a-z0-9]$|^[a-z0-9]$`)
 	if !valid.MatchString(id) {
+		log.Printf("User ID must be lowercase alphanumeric with optional hyphens/underscores")
 		return fmt.Errorf("user ID must be lowercase alphanumeric with optional hyphens/underscores")
 	}
 

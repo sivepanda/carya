@@ -2,9 +2,12 @@ package git
 
 import (
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 )
+
+// lorem ipsum dolor sit
 
 // RefManager handles git ref operations for Carya user state sharing.
 type RefManager struct {
@@ -33,6 +36,7 @@ func (r *RefManager) UpdateUserTreeRef(userID, treeHash string) error {
 	cmd.Dir = r.repoPath
 
 	if output, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("Failed to update user tree ref: %v, output: %s", err, output)
 		return fmt.Errorf("failed to update user tree ref: %w\nOutput: %s", err, output)
 	}
 
@@ -48,6 +52,7 @@ func (r *RefManager) GetUserTreeRef(userID string) (string, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
+		log.Printf("User ref not found: %s", userID)
 		return "", fmt.Errorf("user ref not found: %s", userID)
 	}
 
@@ -62,6 +67,7 @@ func (r *RefManager) DeleteUserTreeRef(userID string) error {
 	cmd.Dir = r.repoPath
 
 	if output, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("Failed to delete user tree ref: %v, output: %s", err, output)
 		return fmt.Errorf("failed to delete user tree ref: %w\nOutput: %s", err, output)
 	}
 
@@ -114,6 +120,7 @@ func (r *RefManager) SetBaseRef() error {
 
 	output, err := cmd.Output()
 	if err != nil {
+		log.Printf("Failed to get HEAD: %v", err)
 		return fmt.Errorf("failed to get HEAD: %w", err)
 	}
 
@@ -124,6 +131,7 @@ func (r *RefManager) SetBaseRef() error {
 	cmd.Dir = r.repoPath
 
 	if output, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("Failed to set base ref: %v, output: %s", err, output)
 		return fmt.Errorf("failed to set base ref: %w\nOutput: %s", err, output)
 	}
 
@@ -137,6 +145,7 @@ func (r *RefManager) GetBaseRef() (string, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
+		log.Printf("Base ref not found")
 		return "", fmt.Errorf("base ref not found")
 	}
 
@@ -149,6 +158,7 @@ func (r *RefManager) FetchCaryaRefs(remote string) error {
 	checkCmd := exec.Command("git", "remote", "get-url", remote)
 	checkCmd.Dir = r.repoPath
 	if _, err := checkCmd.Output(); err != nil {
+		log.Printf("Remote '%s' not found", remote)
 		return fmt.Errorf("remote '%s' not found", remote)
 	}
 
@@ -161,6 +171,7 @@ func (r *RefManager) FetchCaryaRefs(remote string) error {
 		if strings.Contains(outputStr, "no match") {
 			return nil
 		}
+		log.Printf("Failed to fetch carya refs: %v, output: %s", err, outputStr)
 		return fmt.Errorf("failed to fetch carya refs: %w\nOutput: %s", err, outputStr)
 	}
 
@@ -175,6 +186,7 @@ func (r *RefManager) PushUserRef(remote, userID string) error {
 	cmd.Dir = r.repoPath
 
 	if output, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("Failed to push user ref: %v, output: %s", err, output)
 		return fmt.Errorf("failed to push user ref: %w\nOutput: %s", err, output)
 	}
 
@@ -188,6 +200,7 @@ func (r *RefManager) GetHEADTreeHash() (string, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
+		log.Printf("Failed to get HEAD tree: %v", err)
 		return "", fmt.Errorf("failed to get HEAD tree: %w", err)
 	}
 
@@ -201,6 +214,7 @@ func (r *RefManager) ResolveRef(refName string) (string, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
+		log.Printf("Failed to resolve ref %s: %v", refName, err)
 		return "", fmt.Errorf("failed to resolve ref %s: %w", refName, err)
 	}
 

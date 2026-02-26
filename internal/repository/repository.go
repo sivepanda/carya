@@ -3,6 +3,7 @@ package repository
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ type Repository struct {
 func New() (*Repository, error) {
 	wd, err := os.Getwd()
 	if err != nil {
+		log.Printf("Failed to get working directory: %v", err)
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
 
@@ -30,6 +32,7 @@ func New() (*Repository, error) {
 // EnsureExists creates the .carya directory if it doesn't exist
 func (r *Repository) EnsureExists() error {
 	if err := os.MkdirAll(r.caryaPath, 0755); err != nil {
+		log.Printf("Failed to create .carya directory: %v", err)
 		return fmt.Errorf("failed to create .carya directory: %w", err)
 	}
 	return nil
@@ -101,23 +104,27 @@ func (r *Repository) EnsureGitignore() error {
 
 	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
+		log.Printf("Failed to open .gitignore: %v", err)
 		return fmt.Errorf("failed to open .gitignore: %w", err)
 	}
 	defer f.Close()
 
 	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
 		if _, err := f.WriteString("\n"); err != nil {
+			log.Printf("Failed to write to .gitignore: %v", err)
 			return fmt.Errorf("failed to write to .gitignore: %w", err)
 		}
 	}
 
 	if len(content) == 0 {
 		if _, err := f.WriteString("# Carya directory\n"); err != nil {
+			log.Printf("Failed to write to .gitignore: %v", err)
 			return fmt.Errorf("failed to write to .gitignore: %w", err)
 		}
 	}
 
 	if _, err := f.WriteString(caryaEntry + "\n"); err != nil {
+		log.Printf("Failed to write to .gitignore: %v", err)
 		return fmt.Errorf("failed to write to .gitignore: %w", err)
 	}
 

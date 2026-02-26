@@ -40,6 +40,7 @@ type Analyzer struct {
 func NewAnalyzer(repoPath, caryaPath string) (*Analyzer, error) {
 	uid, err := identity.NewUserIdentity(caryaPath).Get()
 	if err != nil {
+		log.Printf("User identity not found: %v", err)
 		return nil, fmt.Errorf("user identity not found: %w", err)
 	}
 

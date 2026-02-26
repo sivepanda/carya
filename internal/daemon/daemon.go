@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,6 +43,7 @@ func (d *Daemon) ReadPID() (int, error) {
 
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
+		log.Printf("Invalid PID in file: %v", err)
 		return 0, fmt.Errorf("invalid PID in file: %w", err)
 	}
 
@@ -62,17 +64,20 @@ func (d *Daemon) RemovePID() error {
 // Start starts the daemon in background mode
 func (d *Daemon) Start(args []string) error {
 	if d.IsRunning() {
+		log.Printf("Daemon is already running")
 		return fmt.Errorf("daemon is already running")
 	}
 
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(d.pidFile), 0755); err != nil {
+		log.Printf("Failed to create daemon directory: %v", err)
 		return fmt.Errorf("failed to create daemon directory: %w", err)
 	}
 
 	// Create log file
 	logFile, err := os.OpenFile(d.logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
+		log.Printf("Failed to create log file: %v", err)
 		return fmt.Errorf("failed to create log file: %w", err)
 	}
 	defer logFile.Close()
@@ -80,6 +85,7 @@ func (d *Daemon) Start(args []string) error {
 	// Get current executable
 	executable, err := os.Executable()
 	if err != nil {
+		log.Printf("Failed to get executable path: %v", err)
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
@@ -93,6 +99,7 @@ func (d *Daemon) Start(args []string) error {
 func (d *Daemon) Stop() error {
 	pid, err := d.ReadPID()
 	if err != nil {
+		log.Printf("Daemon is not running or PID file not found: %v", err)
 		return fmt.Errorf("daemon is not running or PID file not found: %w", err)
 	}
 
@@ -102,6 +109,7 @@ func (d *Daemon) Stop() error {
 
 	// Remove PID file
 	if err := d.RemovePID(); err != nil {
+		log.Printf("Failed to remove PID file: %v", err)
 		return fmt.Errorf("failed to remove PID file: %w", err)
 	}
 

@@ -4,6 +4,7 @@ package git
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,7 @@ func (s *ShadowRepo) Initialize() error {
 
 	if _, err := os.Stat(s.gitDir); err != nil {
 		if err := os.MkdirAll(s.gitDir, 0755); err != nil {
+			log.Printf("Failed to create shadow directory: %v", err)
 			return fmt.Errorf("failed to create shadow directory: %w", err)
 		}
 
@@ -41,6 +43,7 @@ func (s *ShadowRepo) Initialize() error {
 		cmd.Dir = s.gitDir
 		cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
 		if output, err := cmd.CombinedOutput(); err != nil {
+			log.Printf("Failed to initialize shadow repo: %v, output: %s", err, output)
 			return fmt.Errorf("failed to initialize shadow repo: %w\nOutput: %s", err, output)
 		}
 	}
@@ -55,9 +58,11 @@ func (s *ShadowRepo) ensureAlternates() error {
 	shadowObjects := filepath.Join(s.gitDir, "objects")
 
 	if err := appendAlternate(filepath.Join(shadowObjects, "info", "alternates"), mainObjects); err != nil {
+		log.Printf("Failed to set shadow alternates: %v", err)
 		return fmt.Errorf("failed to set shadow alternates: %w", err)
 	}
 	if err := appendAlternate(filepath.Join(mainObjects, "info", "alternates"), shadowObjects); err != nil {
+		log.Printf("Failed to set main alternates: %v", err)
 		return fmt.Errorf("failed to set main alternates: %w", err)
 	}
 	return nil
@@ -92,6 +97,7 @@ func (s *ShadowRepo) SeedIndexFromMainHEAD() error {
 	cmd.Dir = s.workTree
 	output, err := cmd.Output()
 	if err != nil {
+		log.Printf("Failed to get HEAD tree: %v", err)
 		return fmt.Errorf("failed to get HEAD tree: %w", err)
 	}
 	return s.readTree(strings.TrimSpace(string(output)))
@@ -140,6 +146,7 @@ func (s *ShadowRepo) HashObject(content []byte) (string, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
+		log.Printf("Failed to hash object: %v", err)
 		return "", fmt.Errorf("failed to hash object: %w", err)
 	}
 
@@ -156,6 +163,7 @@ func (s *ShadowRepo) GetObjectContent(hash string) ([]byte, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
+		log.Printf("Failed to get object content: %v", err)
 		return nil, fmt.Errorf("failed to get object content: %w", err)
 	}
 
@@ -171,6 +179,7 @@ func (s *ShadowRepo) UpdateIndex(path, blobHash, mode string) error {
 	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
 
 	if output, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("Failed to update index: %v, output: %s", err, output)
 		return fmt.Errorf("failed to update index: %w\nOutput: %s", err, output)
 	}
 
@@ -200,6 +209,7 @@ func (s *ShadowRepo) WriteTree() (string, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
+		log.Printf("Failed to write tree: %v", err)
 		return "", fmt.Errorf("failed to write tree: %w", err)
 	}
 
@@ -228,6 +238,7 @@ func (s *ShadowRepo) DiffBlobs(oldHash, newHash, path string) (string, error) {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return string(output), nil
 		}
+		log.Printf("Failed to diff blobs: %v", err)
 		return "", fmt.Errorf("failed to diff blobs: %w", err)
 	}
 
@@ -240,6 +251,7 @@ func (s *ShadowRepo) DiffBlobsRaw(oldHash, newHash string) (string, error) {
 	defer s.mu.Unlock()
 
 	if oldHash == "" || newHash == "" {
+		log.Printf("Both hashes must be provided for DiffBlobsRaw")
 		return "", fmt.Errorf("both hashes must be provided")
 	}
 
@@ -252,6 +264,7 @@ func (s *ShadowRepo) DiffBlobsRaw(oldHash, newHash string) (string, error) {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return string(output), nil
 		}
+		log.Printf("Failed to diff blobs (raw): %v", err)
 		return "", fmt.Errorf("failed to diff blobs: %w", err)
 	}
 
@@ -281,6 +294,7 @@ func (s *ShadowRepo) readTree(treeHash string) error {
 	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
 
 	if output, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("Failed to read tree: %v, output: %s", err, output)
 		return fmt.Errorf("failed to read tree: %w\nOutput: %s", err, output)
 	}
 
@@ -303,6 +317,7 @@ func (s *ShadowRepo) CheckoutTree(treeHash string) error {
 	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir, "GIT_WORK_TREE="+s.workTree)
 
 	if output, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("Failed to checkout tree: %v, output: %s", err, output)
 		return fmt.Errorf("failed to checkout tree: %w\nOutput: %s", err, output)
 	}
 
@@ -319,6 +334,7 @@ func (s *ShadowRepo) ListTree(treeHash string) ([]TreeEntry, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
+		log.Printf("Failed to list tree: %v", err)
 		return nil, fmt.Errorf("failed to list tree: %w", err)
 	}
 

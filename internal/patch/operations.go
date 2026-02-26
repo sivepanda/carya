@@ -3,6 +3,7 @@ package patch
 import (
 	"carya/internal/chunk"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 )
@@ -64,6 +65,7 @@ func Apply(patch string) error {
 	applyCmd.Stdin = strings.NewReader(patch)
 
 	if output, err := applyCmd.CombinedOutput(); err != nil {
+		log.Printf("Failed to apply patch: %v, output: %s", err, output)
 		return fmt.Errorf("failed to apply patch: %w\n%s", err, output)
 	}
 
@@ -74,6 +76,7 @@ func Commit(message string) (string, error) {
 	commitCmd := exec.Command("git", "commit", "-m", message)
 	output, err := commitCmd.CombinedOutput()
 	if err != nil {
+		log.Printf("Failed to create commit: %v, output: %s", err, output)
 		return "", fmt.Errorf("failed to create commit: %w\n%s", err, output)
 	}
 
