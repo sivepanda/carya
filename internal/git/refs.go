@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-// lorem ipsum dolor sit
-
 // RefManager handles git ref operations for Carya user state sharing.
 type RefManager struct {
 	repoPath string // Path to the main git repository
@@ -182,7 +180,7 @@ func (r *RefManager) FetchCaryaRefs(remote string) error {
 func (r *RefManager) PushUserRef(remote, userID string) error {
 	refPath := fmt.Sprintf("refs/carya/users/%s/tree", userID)
 
-	cmd := exec.Command("git", "push", remote, refPath)
+	cmd := exec.Command("git", "push", "--force", remote, refPath)
 	cmd.Dir = r.repoPath
 
 	if output, err := cmd.CombinedOutput(); err != nil {
