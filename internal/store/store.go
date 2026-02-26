@@ -1,0 +1,143 @@
+// Package store provides storage implementations for persisting chunks in the
+// Carya version control system, including SQLite and JSON-based storage.
+package store
+
+import (
+	"carya/internal/chunk"
+	"database/sql"
+
+	_ "modernc.org/sqlite"
+)
+
+// SQLiteStore provides SQLite-based persistent storage for chunks.
+type SQLiteStore struct {
+	db *sql.DB // SQLite database connection
+}
+
+// NewSQLiteStore creates a new SQLite store with the specified database file path.
+// It automatically initializes the required tables and indexes.
+func NewSQLiteStore(dataSourceName string) (*SQLiteStore, error) {
+	db, err := sql.Open("sqlite", dataSourceName)
+	if err != nil {
+		return nil, err
+	}
+
+	store := &SQLiteStore{db: db}
+	if err := store.initTables(); err != nil {
+		return nil, err
+	}
+
+	return store, nil
+}
+
+// initTables creates the chunks table and associated indexes if they don't exist.
+func (s *SQLiteStore) initTables() error {
+	query := `
+		CREATE TABLE IF NOT EXISTS chunks (
+			id TEXT PRIMARY KEY,
+			file_path TEXT NOT NULL,
+			diff TEXT NOT NULL,
+			start_time TIMESTAMP NOT NULL,
+			end_time TIMESTAMP NOT NULL,
+			hash TEXT NOT NULL,
+			manual BOOLEAN NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			initial_blob_hash TEXT,
+			final_blob_hash TEXT,
+			tree_hash TEXT
+		);
+		CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON chunks(file_path);
+		CREATE INDEX IF NOT EXISTS idx_chunks_created_at ON chunks(created_at);
+		CREATE INDEX IF NOT EXISTS idx_chunks_tree_hash ON chunks(tree_hash);
+	`
+	_, err := s.db.Exec(query)
+	if err != nil {
+		return err
+	}
+
+	// Run migrations for existing databases
+	return s.runMigrations()
+}
+
+// runMigrations adds new columns to existing tables if they don't exist.
+func (s *SQLiteStore) runMigrations() error {
+	// Check if columns exist and add them if not
+	migrations := []string{
+		"ALTER TABLE chunks ADD COLUMN initial_blob_hash TEXT",
+		"ALTER TABLE chunks ADD COLUMN final_blob_hash TEXT",
+		"ALTER TABLE chunks ADD COLUMN tree_hash TEXT",
+	}
+
+	for _, migration := range migrations {
+		// SQLite will error if column already exists, which is fine
+		s.db.Exec(migration)
+	}
+
+	// Ensure index exists
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_chunks_tree_hash ON chunks(tree_hash)")
+
+	return nil
+}
+
+// SaveChunk persists a chunk to the SQLite database, replacing any existing chunk with the same ID.
+func (s *SQLiteStore) SaveChunk(c chunk.Chunk) error {
+	query := `
+		INSERT OR REPLACE INTO chunks (id, file_path, diff, start_time, end_time, hash, manual)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err := s.db.Exec(query, c.ID, c.FilePath, c.Diff, c.StartTime, c.EndTime, c.Hash, c.Manual)
+	return err
+}
+
+// FindChunks retrieves all chunks for a specific file path, ordered by creation time (newest first).
+func (s *SQLiteStore) FindChunks(filePath string) ([]chunk.Chunk, error) {
+	query := `
+		SELECT id, file_path, diff, start_time, end_time, hash, manual
+		FROM chunks 
+		WHERE file_path = ?
+		ORDER BY created_at DESC
+	`
+	rows, err := s.db.Query(query, filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return s.scanChunks(rows)
+}
+
+// GetRecentChunks retrieves the most recently created chunks up to the specified limit.
+func (s *SQLiteStore) GetRecentChunks(limit int) ([]chunk.Chunk, error) {
+	query := `
+		SELECT id, file_path, diff, start_time, end_time, hash, manual
+		FROM chunks 
+		ORDER BY created_at DESC
+		LIMIT ?
+	`
+	rows, err := s.db.Query(query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return s.scanChunks(rows)
+}
+
+// scanChunks converts SQL rows into a slice of Chunk structs.
+func (s *SQLiteStore) scanChunks(rows *sql.Rows) ([]chunk.Chunk, error) {
+	var chunks []chunk.Chunk
+	for rows.Next() {
+		var c chunk.Chunk
+		err := rows.Scan(&c.ID, &c.FilePath, &c.Diff, &c.StartTime, &c.EndTime, &c.Hash, &c.Manual)
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, c)
+	}
+	return chunks, rows.Err()
+}
+
+// Close closes the SQLite database connection.
+func (s *SQLiteStore) Close() error {
+	return s.db.Close()
+}
