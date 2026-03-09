@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,16 +64,19 @@ var pullCmd = &cobra.Command{
 func pullFromGit() (bool, []string, error) {
 	configPath, err := mycelia.GetConfigPath()
 	if err != nil {
+		log.Printf("Failed to get config path: %v", err)
 		return false, nil, fmt.Errorf("failed to get config path: %w", err)
 	}
 
 	wd, err := os.Getwd()
 	if err != nil {
+		log.Printf("Failed to get working directory: %v", err)
 		return false, nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
 
 	relPath, err := filepath.Rel(wd, configPath)
 	if err != nil {
+		log.Printf("Failed to get relative path: %v", err)
 		return false, nil, fmt.Errorf("failed to get relative path: %w", err)
 	}
 
@@ -82,6 +86,7 @@ func pullFromGit() (bool, []string, error) {
 	// Get the current HEAD commit before pull
 	beforeCommit, err := getHeadCommit()
 	if err != nil {
+		log.Printf("Failed to get HEAD commit: %v", err)
 		return false, nil, fmt.Errorf("failed to get HEAD commit: %w", err)
 	}
 
@@ -93,6 +98,7 @@ func pullFromGit() (bool, []string, error) {
 	pullCmd.Dir = wd
 
 	if err := pullCmd.Run(); err != nil {
+		log.Printf("Git pull failed: %v", err)
 		return false, nil, fmt.Errorf("git pull failed: %w", err)
 	}
 

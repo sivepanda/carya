@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 
 	"carya/internal/git"
@@ -58,8 +59,11 @@ working state. Use --push to also push the ref to the remote repository.`,
 		}
 
 		fmt.Printf("Published working state as %s\n", userID)
+		log.Printf("Published working state as %s\n", userID)
 		fmt.Printf("  Tree hash: %s\n", treeHash[:12])
+		log.Printf("  Tree hash: %s\n", treeHash[:12])
 		fmt.Printf("  Ref: refs/carya/users/%s/tree\n", userID)
+		log.Printf("  Ref: refs/carya/users/%s/tree\n", userID)
 
 		// Push if requested
 		if pushFlag {

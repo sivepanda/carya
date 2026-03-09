@@ -2,6 +2,7 @@ package init
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -28,6 +29,7 @@ type Initializer struct {
 func NewInitializer(enabledFeatures []string) (*Initializer, error) {
 	repo, err := repository.New()
 	if err != nil {
+		log.Printf("Failed to create repository: %v", err)
 		return nil, fmt.Errorf("failed to create repository: %w", err)
 	}
 
@@ -56,6 +58,7 @@ func (i *Initializer) Initialize() error {
 
 	// Create .carya directory
 	if err := i.repo.EnsureExists(); err != nil {
+		log.Printf("Failed to create repository: %v", err)
 		return fmt.Errorf("failed to create repository: %w", err)
 	}
 
@@ -64,6 +67,7 @@ func (i *Initializer) Initialize() error {
 
 	shadow := git.NewShadowRepo(i.repo.CaryaPath(), i.repo.RootPath())
 	if err := shadow.Initialize(); err != nil {
+		log.Printf("Failed to initialize shadow repository: %v", err)
 		return fmt.Errorf("failed to initialize shadow repository: %w", err)
 	}
 
@@ -75,10 +79,12 @@ func (i *Initializer) Initialize() error {
 	if i.isFeatureEnabled("featcom") {
 		i.engineFeature = engine.NewEngineFeature()
 		if err := i.engineFeature.Initialize(i.repo); err != nil {
+			log.Printf("Failed to initialize engine: %v", err)
 			i.featureErrors["featcom"] = fmt.Errorf("engine: %w", err)
 		} else {
 			i.watcherFeature = watcher.NewWatcherFeature()
 			if err := i.watcherFeature.InitializeWithEngine(i.repo, i.engineFeature.Engine()); err != nil {
+				log.Printf("Failed to initialize watcher: %v", err)
 				i.featureErrors["featcom"] = fmt.Errorf("watcher: %w", err)
 			}
 		}
@@ -111,6 +117,7 @@ func (i *Initializer) Run() error {
 	// Start engine
 	if i.engineFeature != nil {
 		if err := i.engineFeature.Start(); err != nil {
+			log.Printf("Failed to start engine: %v", err)
 			return fmt.Errorf("failed to start engine: %w", err)
 		}
 		defer i.engineFeature.Stop()
@@ -119,6 +126,7 @@ func (i *Initializer) Run() error {
 	// Start watcher
 	if i.watcherFeature != nil {
 		if err := i.watcherFeature.Start(); err != nil {
+			log.Printf("Failed to start watcher: %v", err)
 			return fmt.Errorf("failed to start watcher: %w", err)
 		}
 		defer i.watcherFeature.Stop()

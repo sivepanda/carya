@@ -260,6 +260,7 @@ func isBinary(content []byte) bool {
 // WriteTree writes the current shadow index as a tree and returns its hash.
 func (s *UnifiedStrategy) WriteTree() (string, error) {
 	if s.shadow == nil {
+		log.Printf("Shadow repo not initialized")
 		return "", fmt.Errorf("shadow repo not initialized")
 	}
 	return s.shadow.WriteTree()

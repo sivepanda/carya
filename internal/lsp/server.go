@@ -64,6 +64,7 @@ func (s *Server) readMessage() (*Message, error) {
 		}
 	}
 	if contentLength == 0 {
+		log.Printf("Missing Content-Length header")
 		return nil, fmt.Errorf("missing Content-Length header")
 	}
 	body := make([]byte, contentLength)
