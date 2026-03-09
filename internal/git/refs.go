@@ -3,6 +3,7 @@ package git
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -178,9 +179,33 @@ func (r *RefManager) FetchCaryaRefs(remote string) error {
 
 // PushUserRef pushes a user's tree ref to a remote.
 func (r *RefManager) PushUserRef(remote, userID string) error {
-	refPath := fmt.Sprintf("refs/carya/users/%s/tree", userID)
+	// Get the user's current tree hash
+	treeHash, err := r.GetUserTreeRef(userID)
+	if err != nil {
+		return fmt.Errorf("failed to get user tree ref: %w", err)
+	}
 
-	cmd := exec.Command("git", "push", "--force", remote, refPath)
+	// Create a commit object pointing to the tree so it can be pushed
+	commitCmd := exec.Command("git", "commit-tree", treeHash, "-m", "state snapshot")
+	commitCmd.Dir = r.repoPath
+	commitCmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=carya",
+		"GIT_AUTHOR_EMAIL=carya@internal",
+		"GIT_COMMITTER_NAME=carya",
+		"GIT_COMMITTER_EMAIL=carya@internal",
+	)
+	out, err := commitCmd.Output()
+	if err != nil {
+		log.Printf("Failed to create commit for tree %s: %v", treeHash, err)
+		return fmt.Errorf("failed to create commit for tree: %w", err)
+	}
+	commitSHA := strings.TrimSpace(string(out))
+
+	// Push the commit to the user's ref on the remote
+	cmd := exec.Command("git", "push", remote,
+		fmt.Sprintf("%s:refs/carya/users/%s/tree", commitSHA, userID),
+		"--force",
+	)
 	cmd.Dir = r.repoPath
 
 	if output, err := cmd.CombinedOutput(); err != nil {

@@ -30,15 +30,7 @@ var composeCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Set up logging immediately
-		logFile, err := os.OpenFile(repo.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to open log file: %v\n", err)
-		} else {
-			defer logFile.Close()
-			log.SetOutput(logFile)
-			log.Println("===== Compose command started =====")
-		}
+		log.Println("===== Compose command started =====")
 
 		// If no db path specified, use the default repository path
 		if dbPath == "" {

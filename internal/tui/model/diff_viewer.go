@@ -2,13 +2,11 @@ package model
 
 import (
 	"carya/internal/chunk"
-	"carya/internal/repository"
 	"carya/internal/store"
 	"carya/internal/tui"
 	"carya/internal/tui/shared"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -288,23 +286,7 @@ func (m *DiffViewer) updateDiffContent() {
 
 // RunDiffViewer runs the diff viewer TUI
 func RunDiffViewer(dataSourceName string) error {
-	// Setup logging to the repo log file
-	repo, err := repository.New()
-	if err != nil {
-		log.Printf("Failed to initialize repository: %v", err)
-		return fmt.Errorf("failed to initialize repository: %w", err)
-	}
-
-	// Open log file for appending
-	logFile, err := os.OpenFile(repo.LogPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Printf("Failed to open log file: %v", err)
-		return fmt.Errorf("failed to open log file: %w", err)
-	}
-	defer logFile.Close()
-
-	// Configure logger
-	log.SetOutput(logFile)
+	// Configure logger prefix for diff viewer context
 	log.SetPrefix("DiffViewer: ")
 	log.SetFlags(log.Ldate | log.Ltime)
 	log.Println("Starting diff viewer")

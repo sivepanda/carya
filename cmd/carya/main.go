@@ -4,16 +4,38 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
+
+	"carya/internal/repository"
 
 	"github.com/sivepanda/mycelia"
 	"github.com/spf13/cobra"
 )
 
+var globalLogFile *os.File
+
 var rootCmd = &cobra.Command{
 	Use:   "carya",
 	Short: "Carya is a next-gen version control system.",
 	Long:  `A fast and powerful version control system built with a focus on developer experience and collaboration.`,
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		repo, err := repository.New()
+		if err != nil || !repo.Exists() {
+			return
+		}
+		f, err := os.OpenFile(repo.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return
+		}
+		globalLogFile = f
+		log.SetOutput(f)
+	},
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		if globalLogFile != nil {
+			globalLogFile.Close()
+		}
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Carya is running. Use 'carya --help' for a list of commands.")
 	},

@@ -46,13 +46,6 @@ var daemonCmd = &cobra.Command{
 		}
 		defer d.RemovePID()
 
-		logFile, err := os.OpenFile(repo.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			log.Fatalf("Failed to open log file: %v", err)
-		}
-		defer logFile.Close()
-		log.SetOutput(logFile)
-
 		log.Println("Starting Carya daemon...")
 
 		teamCfg := config.LoadTeamConfig(repo.CaryaPath())
