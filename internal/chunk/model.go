@@ -4,14 +4,14 @@ import "time"
 
 // Chunk represents a discrete unit of file changes tracked by Carya (diff, timing information, and metadata about changes)
 type Chunk struct {
-	ID        ChunkID   // Unique identifier for this chunk
-	FilePath  string    // Path to the file this chunk represents
-	Diff      string    // The actual diff content
-	StartTime time.Time // When the chunk period started
-	EndTime   time.Time // When the chunk period ended
-	// FeatureTag feature.Tag // where we will implement feature tagging
-	Hash   ChunkHash // Hash of the chunk content for integrity
-	Manual bool      // Whether this chunk was manually created
+	ID           ChunkID   // Unique identifier for this chunk
+	FilePath     string    // Path to the file this chunk represents
+	Diff         string    // The actual diff content
+	StartTime    time.Time // When the chunk period started
+	EndTime      time.Time // When the chunk period ended
+	FeatureLabel string    // Optional feature grouping label
+	Hash         ChunkHash // Hash of the chunk content for integrity
+	Manual       bool      // Whether this chunk was manually created
 }
 
 // FileChange represents a single file modification event with its timestamp and content.

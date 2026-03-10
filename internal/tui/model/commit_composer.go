@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -37,6 +38,14 @@ const (
 type ChunkStore interface {
 	GetRecentChunks(limit int) ([]chunk.Chunk, error)
 	FindChunks(filePath string) ([]chunk.Chunk, error)
+	UpdateChunkFeatureLabel(ids []chunk.ChunkID, label string) error
+	ClearChunkFeatureLabel(ids []chunk.ChunkID) error
+}
+
+type composerRow struct {
+	isFolder   bool
+	label      string
+	chunkIndex int
 }
 
 // CommitComposer represents the Bubble Tea model for selecting and committing diffs
@@ -62,6 +71,12 @@ type CommitComposer struct {
 	pendingWarnings  []string // Store warnings for the warning view
 	pendingPatch     string   // Store patch for applying after confirmation
 	pendingCommitMsg string   // Store commit message for applying after confirmation
+	rows             []composerRow
+	labelInput       textinput.Model
+	editingLabel     bool
+	pendingLabels    map[chunk.ChunkID]string
+	dirtyLabels      bool
+	statusLine       string
 }
 
 // NewCommitComposer creates a new commit composer model
@@ -94,6 +109,12 @@ func NewCommitComposer(store ChunkStore) (*CommitComposer, error) {
 	ti.Width = 60
 	ti.Prompt = ""
 
+	labelInput := textinput.New()
+	labelInput.Placeholder = "Feature label (example: composer/navigation)"
+	labelInput.CharLimit = 80
+	labelInput.Width = 60
+	labelInput.Prompt = ""
+
 	m := &CommitComposer{
 		help:           h,
 		keys:           tui.DefaultKeys(),
@@ -104,9 +125,12 @@ func NewCommitComposer(store ChunkStore) (*CommitComposer, error) {
 		width:          80,
 		height:         24,
 		commitMsg:      ti,
+		labelInput:     labelInput,
 		status:         StatusSelecting,
 		spinner:        s,
+		pendingLabels:  make(map[chunk.ChunkID]string),
 	}
+	m.rebuildRows()
 
 	return m, nil
 }
@@ -173,7 +197,6 @@ func (m *CommitComposer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateSelecting handles the chunk selection state
 func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
-
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -191,14 +214,43 @@ func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
 			shared.UpdateViewportSizes(&m.listViewport, &m.diffViewport, layout)
 		}
 
-		// Update diff content if chunks exist
-		if len(m.chunks) > 0 && m.cursor < len(m.chunks) {
+		if len(m.rows) > 0 {
 			m.updateDiffContent()
 		}
 
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.editingLabel {
+			switch msg.String() {
+			case "esc":
+				m.editingLabel = false
+				m.labelInput.Blur()
+				m.statusLine = "label edit cancelled"
+				return m, nil
+			case "enter":
+				label := strings.TrimSpace(m.labelInput.Value())
+				if label == "" {
+					m.statusLine = "feature label cannot be empty"
+					return m, nil
+				}
+				updated := m.assignLabelToSelected(label)
+				m.editingLabel = false
+				m.labelInput.Blur()
+				if updated == 0 {
+					m.statusLine = "select at least one chunk first"
+				} else {
+					m.statusLine = fmt.Sprintf("assigned %d chunk(s) to %q", updated, label)
+				}
+				m.updateDiffContent()
+				return m, nil
+			}
+
+			var cmd tea.Cmd
+			m.labelInput, cmd = m.labelInput.Update(msg)
+			return m, cmd
+		}
+
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
@@ -210,27 +262,47 @@ func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.Down):
-			if m.cursor < len(m.chunks)-1 {
+			if m.cursor < len(m.rows)-1 {
 				m.cursor++
 				m.updateDiffContent()
 			}
 
 		case key.Matches(msg, m.keys.Select):
-			// Toggle selection for the current chunk
-			if len(m.chunks) > 0 {
-				m.selectedChunks[m.cursor] = !m.selectedChunks[m.cursor]
+			m.toggleCurrentSelection()
+			m.updateDiffContent()
+
+		case msg.String() == "ctrl+s":
+			saved, err := m.persistPendingLabels()
+			if err != nil {
+				m.statusLine = fmt.Sprintf("save failed: %v", err)
+			} else if saved == 0 {
+				m.statusLine = "nothing to save"
+			} else {
+				m.statusLine = fmt.Sprintf("saved %d label update(s)", saved)
+			}
+
+		case msg.String() == "f":
+			if m.selectedChunkCount() == 0 {
+				m.statusLine = "select at least one chunk first"
+				break
+			}
+			m.editingLabel = true
+			m.labelInput.SetValue("")
+			m.labelInput.Focus()
+			m.statusLine = "type a feature label, then press enter"
+
+		case msg.String() == "p":
+			updated := m.clearLabelForSelected()
+			if updated == 0 {
+				m.statusLine = "select at least one chunk first"
+			} else {
+				m.statusLine = fmt.Sprintf("popped %d chunk(s) out of feature", updated)
+				m.updateDiffContent()
 			}
 
 		case msg.String() == "enter":
 			// Only proceed if at least one chunk is actually selected
-			hasSelected := false
-			for _, selected := range m.selectedChunks {
-				if selected {
-					hasSelected = true
-					break
-				}
-			}
-			if hasSelected {
+			if m.selectedChunkCount() > 0 {
 				m.status = StatusEditing
 				m.commitMsg.Focus()
 				return m, textinput.Blink
@@ -245,6 +317,186 @@ func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *CommitComposer) rebuildRows() {
+	type grouped struct {
+		label   string
+		indices []int
+	}
+
+	groups := map[string][]int{}
+	for i, c := range m.chunks {
+		label := strings.TrimSpace(c.FeatureLabel)
+		groups[label] = append(groups[label], i)
+	}
+
+	var labels []string
+	for label := range groups {
+		if label != "" {
+			labels = append(labels, label)
+		}
+	}
+	sort.Strings(labels)
+
+	ordered := make([]grouped, 0, len(labels)+1)
+	ordered = append(ordered, grouped{label: "", indices: groups[""]})
+	for _, label := range labels {
+		ordered = append(ordered, grouped{label: label, indices: groups[label]})
+	}
+
+	rows := make([]composerRow, 0, len(m.chunks)+len(ordered))
+	for _, group := range ordered {
+		rows = append(rows, composerRow{isFolder: true, label: group.label, chunkIndex: -1})
+		for _, idx := range group.indices {
+			rows = append(rows, composerRow{label: group.label, chunkIndex: idx})
+		}
+	}
+
+	m.rows = rows
+	if len(m.rows) == 0 {
+		m.cursor = 0
+		return
+	}
+	if m.cursor >= len(m.rows) {
+		m.cursor = len(m.rows) - 1
+	}
+}
+
+func (m *CommitComposer) selectedChunkCount() int {
+	count := 0
+	for _, selected := range m.selectedChunks {
+		if selected {
+			count++
+		}
+	}
+	return count
+}
+
+func (m *CommitComposer) toggleCurrentSelection() {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return
+	}
+
+	row := m.rows[m.cursor]
+	if row.isFolder {
+		indices := m.chunkIndicesForLabel(row.label)
+		if len(indices) == 0 {
+			return
+		}
+
+		allSelected := true
+		for _, idx := range indices {
+			if !m.selectedChunks[idx] {
+				allSelected = false
+				break
+			}
+		}
+
+		for _, idx := range indices {
+			m.selectedChunks[idx] = !allSelected
+		}
+		return
+	}
+
+	m.selectedChunks[row.chunkIndex] = !m.selectedChunks[row.chunkIndex]
+}
+
+func (m *CommitComposer) chunkIndicesForLabel(label string) []int {
+	indices := make([]int, 0)
+	for i, c := range m.chunks {
+		if strings.TrimSpace(c.FeatureLabel) == strings.TrimSpace(label) {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+
+func (m *CommitComposer) selectedChunkIndices() []int {
+	indices := make([]int, 0)
+	for i, selected := range m.selectedChunks {
+		if selected {
+			indices = append(indices, i)
+		}
+	}
+	sort.Ints(indices)
+	return indices
+}
+
+func (m *CommitComposer) assignLabelToSelected(label string) int {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return 0
+	}
+
+	updated := 0
+	for _, idx := range m.selectedChunkIndices() {
+		if idx < 0 || idx >= len(m.chunks) {
+			continue
+		}
+		m.chunks[idx].FeatureLabel = label
+		m.pendingLabels[m.chunks[idx].ID] = label
+		updated++
+	}
+
+	if updated > 0 {
+		m.dirtyLabels = true
+		m.rebuildRows()
+	}
+
+	return updated
+}
+
+func (m *CommitComposer) clearLabelForSelected() int {
+	updated := 0
+	for _, idx := range m.selectedChunkIndices() {
+		if idx < 0 || idx >= len(m.chunks) {
+			continue
+		}
+		if m.chunks[idx].FeatureLabel == "" {
+			continue
+		}
+		m.chunks[idx].FeatureLabel = ""
+		m.pendingLabels[m.chunks[idx].ID] = ""
+		updated++
+	}
+
+	if updated > 0 {
+		m.dirtyLabels = true
+		m.rebuildRows()
+	}
+
+	return updated
+}
+
+func (m *CommitComposer) persistPendingLabels() (int, error) {
+	if len(m.pendingLabels) == 0 {
+		m.dirtyLabels = false
+		return 0, nil
+	}
+
+	idsByLabel := make(map[string][]chunk.ChunkID)
+	for id, label := range m.pendingLabels {
+		idsByLabel[label] = append(idsByLabel[label], id)
+	}
+
+	for label, ids := range idsByLabel {
+		if strings.TrimSpace(label) == "" {
+			if err := m.store.ClearChunkFeatureLabel(ids); err != nil {
+				return 0, err
+			}
+			continue
+		}
+
+		if err := m.store.UpdateChunkFeatureLabel(ids, label); err != nil {
+			return 0, err
+		}
+	}
+
+	saved := len(m.pendingLabels)
+	m.pendingLabels = make(map[chunk.ChunkID]string)
+	m.dirtyLabels = false
+	return saved, nil
 }
 
 // updateEditing handles the commit message editing state
@@ -301,6 +553,10 @@ func (m *CommitComposer) updateConfirming(msg tea.Msg) (tea.Model, tea.Cmd) {
 // createCommit performs the git operations to create a commit from selected diffs
 func (m *CommitComposer) createCommit() tea.Msg {
 	log.Println("Creating commit from selected diffs")
+	if _, err := m.persistPendingLabels(); err != nil {
+		log.Printf("Error saving feature labels: %v", err)
+		return errMsg{fmt.Errorf("failed to save feature labels: %w", err)}
+	}
 
 	// Create a patch from the selected diffs using the patch package
 	log.Println("Creating patch from selected diffs")
@@ -447,16 +703,13 @@ func (m *CommitComposer) renderSelectionView() string {
 	// Join horizontally
 	content := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, diffPanel)
 
-	// Add footer with better formatting
-	selectedCount := 0
-	for _, selected := range m.selectedChunks {
-		if selected {
-			selectedCount++
-		}
-	}
+	selectedCount := m.selectedChunkCount()
 
 	navHelp := tui.HelpKeyStyle.Render("↑/↓") + tui.HelpDescStyle.Render(" navigate")
 	selectHelp := tui.HelpKeyStyle.Render("space") + tui.HelpDescStyle.Render(" select")
+	labelHelp := tui.HelpKeyStyle.Render("f") + tui.HelpDescStyle.Render(" label")
+	popHelp := tui.HelpKeyStyle.Render("p") + tui.HelpDescStyle.Render(" pop")
+	saveHelp := tui.HelpKeyStyle.Render("ctrl+s") + tui.HelpDescStyle.Render(" save labels")
 	continueHelp := tui.HelpKeyStyle.Render("enter") + tui.HelpDescStyle.Render(" continue")
 	quitHelp := tui.HelpKeyStyle.Render("q") + tui.HelpDescStyle.Render(" quit")
 
@@ -464,47 +717,95 @@ func (m *CommitComposer) renderSelectionView() string {
 	if selectedCount > 0 {
 		selectedInfo = tui.SuccessStyle.Render(fmt.Sprintf(" • %d selected", selectedCount))
 	}
+	dirtyInfo := ""
+	if m.dirtyLabels {
+		dirtyInfo = tui.WarningStyle.Render(" • unsaved labels")
+	}
+	statusInfo := ""
+	if strings.TrimSpace(m.statusLine) != "" {
+		statusInfo = "\n" + tui.SubtleTextStyle.Render(m.statusLine)
+	}
 
 	footer := lipgloss.NewStyle().
 		Padding(0, 1).
-		Render(navHelp + " • " + selectHelp + " • " + continueHelp + " • " + quitHelp + selectedInfo)
+		Render(navHelp + " • " + selectHelp + " • " + labelHelp + " • " + popHelp + " • " + saveHelp + " • " + continueHelp + " • " + quitHelp + selectedInfo + dirtyInfo + statusInfo)
+
+	if m.editingLabel {
+		promptHeader := tui.SubheaderStyle.Render("FEATURE LABEL")
+		promptBox := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(tui.ColorBorder).
+			Padding(1, 2).
+			Width(60).
+			Render(m.labelInput.View())
+		promptHelp := tui.HelpDescStyle.Render("enter apply • esc cancel")
+		footer = lipgloss.JoinVertical(lipgloss.Left, footer, "", promptHeader, promptBox, promptHelp)
+	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, content, footer)
 }
 
 // renderChunkListPanel renders the left panel with selectable chunk list
 func (m *CommitComposer) renderChunkListPanel() string {
-	title := tui.HeaderStyle.Padding(1, 2).Render("📋 SELECT DIFFS")
+	title := tui.HeaderStyle.Padding(1, 2).Render("📋 SELECT FEATURES & DIFFS")
 
 	var items []string
-	for i, c := range m.chunks {
-		// Determine if this chunk is selected
-		checkBox := " [ ] "
-		if selected, ok := m.selectedChunks[i]; ok && selected {
-			checkBox = " [✓] "
-		}
-
+	for i, row := range m.rows {
 		cursor := "  "
 		if m.cursor == i {
 			cursor = "❯ "
 		}
 
-		// Format filename
-		filename := filepath.Base(c.FilePath)
-		if len(filename) > 20 {
-			filename = filename[:17] + "..."
-		}
+		var line string
+		if row.isFolder {
+			label := row.label
+			if label == "" {
+				label = "Unassigned"
+			}
+			indices := m.chunkIndicesForLabel(row.label)
+			selected := 0
+			for _, idx := range indices {
+				if m.selectedChunks[idx] {
+					selected++
+				}
+			}
 
-		// Format time
-		timeStr := tui.SubtleTextStyle.Render(c.StartTime.Format("15:04"))
-
-		line := cursor + checkBox + filename + " " + timeStr
-
-		if m.cursor == i {
-			line = tui.SelectedItemStyle.Render(line)
+			checkBox := "[ ]"
+			if selected == len(indices) && len(indices) > 0 {
+				checkBox = "[✓]"
+			} else if selected > 0 {
+				checkBox = "[~]"
+			}
+			line = fmt.Sprintf("%s %s %s (%d)", cursor, checkBox, label, len(indices))
+			line = tui.SubheaderStyle.Render(line)
 		} else {
-			line = tui.ItemStyle.Render(line)
+			chunkIdx := row.chunkIndex
+			if chunkIdx < 0 || chunkIdx >= len(m.chunks) {
+				continue
+			}
+			c := m.chunks[chunkIdx]
+			checkBox := "[ ]"
+			if m.selectedChunks[chunkIdx] {
+				checkBox = "[✓]"
+			}
+
+			filename := filepath.Base(c.FilePath)
+			if len(filename) > 20 {
+				filename = filename[:17] + "..."
+			}
+			timeStr := tui.SubtleTextStyle.Render(c.StartTime.Format("15:04"))
+			line = fmt.Sprintf("%s  %s %s %s", cursor, checkBox, filename, timeStr)
+			if m.cursor == i {
+				line = tui.SelectedItemStyle.Render(line)
+			} else {
+				line = tui.ItemStyle.Render(line)
+			}
 		}
+
+		if row.isFolder && m.cursor == i {
+			line = tui.SelectedItemStyle.Render(line)
+		}
+
 		items = append(items, line)
 	}
 
@@ -525,24 +826,60 @@ func (m *CommitComposer) renderChunkListPanel() string {
 
 // renderDiffPanel renders the right panel with diff content
 func (m *CommitComposer) renderDiffPanel() string {
-	if m.cursor >= len(m.chunks) {
+	if m.cursor >= len(m.rows) || m.cursor < 0 {
 		return ""
 	}
 
-	c := m.chunks[m.cursor]
+	row := m.rows[m.cursor]
+	if row.isFolder {
+		label := row.label
+		if label == "" {
+			label = "Unassigned"
+		}
+		header := tui.TextStyle.Bold(true).Render("Feature folder: " + label)
+		return shared.RenderDiffPanel(header, m.diffViewport.View(), m.diffWidth, m.height, tui.ColorTitle)
+	}
+
+	c := m.chunks[row.chunkIndex]
 	header := shared.RenderChunkHeader(c, tui.SubtleTextStyle, tui.TextStyle.Bold(true))
 	return shared.RenderDiffPanel(header, m.diffViewport.View(), m.diffWidth, m.height, tui.ColorTitle)
 }
 
 // updateDiffContent updates the diff viewport with the current chunk's diff
 func (m *CommitComposer) updateDiffContent() {
-	if m.cursor >= len(m.chunks) || !m.ready {
+	if m.cursor >= len(m.rows) || !m.ready || m.cursor < 0 {
 		return
 	}
 
-	c := m.chunks[m.cursor]
-	diffContent := chunk.FormatDiff(c.Diff)
-	m.diffViewport.SetContent(diffContent)
+	row := m.rows[m.cursor]
+	if row.isFolder {
+		indices := m.chunkIndicesForLabel(row.label)
+		label := row.label
+		if label == "" {
+			label = "Unassigned"
+		}
+		selected := 0
+		files := make([]string, 0, len(indices))
+		for _, idx := range indices {
+			if idx < 0 || idx >= len(m.chunks) {
+				continue
+			}
+			if m.selectedChunks[idx] {
+				selected++
+			}
+			files = append(files, "- "+m.chunks[idx].FilePath)
+		}
+		if len(files) > 8 {
+			files = append(files[:8], fmt.Sprintf("- ... and %d more", len(files)-8))
+		}
+		summary := fmt.Sprintf("%s\n\nChunks: %d\nSelected: %d\n\nFiles:\n%s", label, len(indices), selected, strings.Join(files, "\n"))
+		m.diffViewport.SetContent(summary)
+		m.diffViewport.GotoTop()
+		return
+	}
+
+	c := m.chunks[row.chunkIndex]
+	m.diffViewport.SetContent(chunk.FormatDiff(c.Diff))
 	m.diffViewport.GotoTop()
 }
 
