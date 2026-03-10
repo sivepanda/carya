@@ -60,6 +60,10 @@ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qq
 github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
 github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
+github.com/sivepanda/mycelia v0.0.0-20260301224817-51efdd6eda3d h1:PcrowXrY56j6ebFfF5xqEYV0tkphesTR3/Yv++9TlF0=
+github.com/sivepanda/mycelia v0.0.0-20260301224817-51efdd6eda3d/go.mod h1:9k/um9omAkUCOv7kI/A6cXqia+IaJ7wuyLkQYnWy/nA=
+github.com/sivepanda/mycelia v0.0.1 h1:zKXQeLHjmkaRY/F3uiI+in8uS6xWBmlWKxnrHo2QQI8=
+github.com/sivepanda/mycelia v0.0.1/go.mod h1:9k/um9omAkUCOv7kI/A6cXqia+IaJ7wuyLkQYnWy/nA=
 github.com/spf13/cobra v1.10.2 h1:DMTTonx5m65Ic0GOoRY2c16WCbHxOOw6xxezuLaBpcU=
 github.com/spf13/cobra v1.10.2/go.mod h1:7C1pvHqHw5A4vrJfjNwvOdzYu0Gml16OCs2GRiTUUS4=
 github.com/spf13/pflag v1.0.9/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=

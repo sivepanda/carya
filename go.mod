@@ -8,7 +8,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/sivepanda/mycelia v0.0.0-20260224042218-b190b070d0a3
+	github.com/sivepanda/mycelia v0.0.1
 	github.com/spf13/cobra v1.10.2
 	modernc.org/sqlite v1.45.0
 )
@@ -44,5 +44,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/sivepanda/mycelia => ../mycelia
