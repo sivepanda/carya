@@ -20,6 +20,6 @@ type ChunkStrategy interface {
 // FileChangeEvent represents a file modification event with its metadata.
 type FileChangeEvent struct {
 	Path     string    // Full path to the changed file
-	Contents []byte    // Current contents of the file
+	Contents []byte    // Current contents of the file; nil indicates file deletion
 	Time     time.Time // When the change occurred
 }

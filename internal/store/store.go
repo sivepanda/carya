@@ -5,6 +5,7 @@ package store
 import (
 	"carya/internal/chunk"
 	"database/sql"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -121,6 +122,40 @@ func (s *SQLiteStore) GetRecentChunks(limit int) ([]chunk.Chunk, error) {
 	defer rows.Close()
 
 	return s.scanChunks(rows)
+}
+
+// GetAllChunks retrieves all chunks ordered by creation time (newest first).
+func (s *SQLiteStore) GetAllChunks() ([]chunk.Chunk, error) {
+	query := `
+		SELECT id, file_path, diff, start_time, end_time, hash, manual
+		FROM chunks
+		ORDER BY created_at DESC
+	`
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return s.scanChunks(rows)
+}
+
+// DeleteChunks removes chunks by ID.
+func (s *SQLiteStore) DeleteChunks(ids []chunk.ChunkID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = string(id)
+	}
+
+	query := "DELETE FROM chunks WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	_, err := s.db.Exec(query, args...)
+	return err
 }
 
 // scanChunks converts SQL rows into a slice of Chunk structs.

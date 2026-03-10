@@ -271,6 +271,46 @@ func (s *ShadowRepo) DiffBlobsRaw(oldHash, newHash string) (string, error) {
 	return string(output), nil
 }
 
+// DiffFilesWithPath generates a patch between two file paths and rewrites headers
+// to point at the provided repository-relative path.
+func (s *ShadowRepo) DiffFilesWithPath(oldPath, newPath, targetPath string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cmd := exec.Command("git", "diff", "--no-index", oldPath, newPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+			return "", fmt.Errorf("failed to diff files: %w", err)
+		}
+	}
+
+	diff := string(output)
+	if strings.TrimSpace(diff) == "" {
+		return "", nil
+	}
+
+	oldLabel := oldPath
+	newLabel := newPath
+	if oldPath != "/dev/null" {
+		oldLabel = strings.TrimPrefix(oldPath, "/")
+	}
+	if newPath != "/dev/null" {
+		newLabel = strings.TrimPrefix(newPath, "/")
+	}
+
+	diff = strings.ReplaceAll(diff, "a/"+oldLabel, "a/"+targetPath)
+	diff = strings.ReplaceAll(diff, "b/"+newLabel, "b/"+targetPath)
+	if oldPath != "/dev/null" {
+		diff = strings.ReplaceAll(diff, "b/"+oldLabel, "b/"+targetPath)
+	}
+	if newPath != "/dev/null" {
+		diff = strings.ReplaceAll(diff, "a/"+newLabel, "a/"+targetPath)
+	}
+
+	return diff, nil
+}
+
 // ObjectExists checks if a git object exists.
 func (s *ShadowRepo) ObjectExists(hash string) bool {
 	s.mu.Lock()

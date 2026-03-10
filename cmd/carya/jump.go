@@ -11,9 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"carya/internal/chunk"
 	"carya/internal/git"
 	"carya/internal/repository"
+	"carya/internal/tui"
+	"carya/internal/tui/shared"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -245,8 +249,11 @@ type jumpPreviewModel struct {
 	targetUser string
 	entries    []previewEntry
 	cursor     int
+	filtered   []int
 	list       viewport.Model
 	diff       viewport.Model
+	search     textinput.Model
+	searching  bool
 	ready      bool
 	width      int
 	height     int
@@ -255,7 +262,15 @@ type jumpPreviewModel struct {
 }
 
 func newJumpPreviewModel(targetUser string, entries []previewEntry) jumpPreviewModel {
-	return jumpPreviewModel{targetUser: targetUser, entries: entries, width: 80, height: 24}
+	search := textinput.New()
+	search.Prompt = "search: "
+	search.Placeholder = "type file path..."
+	search.CharLimit = 200
+	search.Width = 36
+
+	model := jumpPreviewModel{targetUser: targetUser, entries: entries, width: 80, height: 24, search: search}
+	model.rebuildFilter()
+	return model
 }
 
 func (m jumpPreviewModel) Init() tea.Cmd { return nil }
@@ -264,37 +279,53 @@ func (m jumpPreviewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.listWidth = msg.Width / 3
-		if m.listWidth < 30 {
-			m.listWidth = 30
-		}
-		m.diffWidth = msg.Width - m.listWidth - 1
-		if m.diffWidth < 40 {
-			m.diffWidth = 40
-		}
+		layout := shared.CalculateSplitViewLayout(msg.Width, msg.Height, 2, 2)
+		m.listWidth = layout.ListWidth
+		m.diffWidth = layout.DiffWidth
 		if !m.ready {
-			m.list = viewport.New(m.listWidth-2, msg.Height-5)
-			m.diff = viewport.New(m.diffWidth-2, msg.Height-5)
+			m.list, m.diff = shared.InitializeViewports(layout)
 			m.ready = true
 		} else {
-			m.list.Width = m.listWidth - 2
-			m.list.Height = msg.Height - 5
-			m.diff.Width = m.diffWidth - 2
-			m.diff.Height = msg.Height - 5
+			shared.UpdateViewportSizes(&m.list, &m.diff, layout)
 		}
 		m.refreshContent()
 		return m, nil
 	case tea.KeyMsg:
+		if m.searching {
+			switch msg.String() {
+			case "esc":
+				m.searching = false
+				m.search.Blur()
+				m.refreshContent()
+				return m, nil
+			case "enter":
+				m.searching = false
+				m.search.Blur()
+				m.refreshContent()
+				return m, nil
+			}
+
+			var cmd tea.Cmd
+			m.search, cmd = m.search.Update(msg)
+			m.rebuildFilter()
+			m.refreshContent()
+			return m, cmd
+		}
+
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
+		case "/":
+			m.searching = true
+			m.search.Focus()
+			return m, textinput.Blink
 		case "up", "k":
-			if m.cursor > 0 {
+			if m.cursor > 0 && len(m.filtered) > 0 {
 				m.cursor--
 				m.refreshContent()
 			}
 		case "down", "j":
-			if m.cursor < len(m.entries)-1 {
+			if m.cursor < len(m.filtered)-1 && len(m.filtered) > 0 {
 				m.cursor++
 				m.refreshContent()
 			}
@@ -310,27 +341,38 @@ func (m jumpPreviewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m jumpPreviewModel) View() string {
 	if !m.ready {
-		return "Loading preview..."
+		loadingText := tui.TextStyle.Render(" Loading preview...")
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, loadingText)
+	}
+	if len(m.entries) == 0 {
+		title := tui.TitleStyle.Render("JUMP PREVIEW")
+		emptyMsg := tui.SubtleTextStyle.Render("No differences")
+		help := tui.HelpDescStyle.Render("q quit")
+		content := lipgloss.JoinVertical(lipgloss.Center, title, "", emptyMsg, "", help)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 	}
 
-	title := lipgloss.NewStyle().Bold(true).Render("Jump Preview (read-only): " + m.targetUser)
+	title := tui.TitleStyle.Render("JUMP PREVIEW (read-only)")
+	subtitle := tui.SubtleTextStyle.Render("Comparing your HEAD against " + m.targetUser + "'s published state")
+	legendMinus := lipgloss.NewStyle().Foreground(tui.ColorError).Bold(true).Render("- YOUR HEAD")
+	legendPlus := lipgloss.NewStyle().Foreground(tui.ColorSuccess).Bold(true).Render("+ " + strings.ToUpper(m.targetUser) + "")
+	legend := tui.SubtleTextStyle.Render("Legend: ") + legendMinus + tui.SubtleTextStyle.Render("  |  ") + legendPlus
 
-	left := lipgloss.NewStyle().
-		Width(m.listWidth).
-		Height(m.height - 1).
-		Border(lipgloss.RoundedBorder()).
-		Render("Files\n" + m.list.View())
+	searchLine := shared.RenderSearchBar(m.searching, m.search.View(), m.search.Value(), len(m.filtered), len(m.entries), m.width)
 
-	right := lipgloss.NewStyle().
-		Width(m.diffWidth).
-		Height(m.height - 1).
-		Border(lipgloss.RoundedBorder()).
-		Render("Patch\n" + m.diff.View())
+	left := shared.RenderTitledPanel("FILES", m.list.View(), m.listWidth, m.height-4, tui.ColorBorder)
+	right := shared.RenderTitledPanel("DIFF", m.diff.View(), m.diffWidth, m.height-4, tui.ColorTitle)
 
-	help := lipgloss.NewStyle().Faint(true).Render("j/k or up/down navigate - ctrl+d/u scroll - q quit")
+	help := tui.HelpKeyStyle.Render("j/k") + tui.HelpDescStyle.Render(" navigate") +
+		tui.HelpDescStyle.Render(" • ") +
+		tui.HelpKeyStyle.Render("/") + tui.HelpDescStyle.Render(" search") +
+		tui.HelpDescStyle.Render(" • ") +
+		tui.HelpKeyStyle.Render("ctrl+d/u") + tui.HelpDescStyle.Render(" scroll") +
+		tui.HelpDescStyle.Render(" • ") +
+		tui.HelpKeyStyle.Render("q") + tui.HelpDescStyle.Render(" quit")
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	return lipgloss.JoinVertical(lipgloss.Left, title, body, help)
+	return lipgloss.JoinVertical(lipgloss.Left, title, subtitle, legend, searchLine, body, help)
 }
 
 func (m *jumpPreviewModel) refreshContent() {
@@ -343,24 +385,69 @@ func (m *jumpPreviewModel) refreshContent() {
 		m.diff.SetContent("No changes between HEAD and target state.")
 		return
 	}
+	if len(m.filtered) == 0 {
+		m.list.SetContent(tui.SubtleTextStyle.Render("No files match filter"))
+		m.diff.SetContent(tui.SubtleTextStyle.Render("Update your search query to see matching files."))
+		return
+	}
+	if m.cursor >= len(m.filtered) {
+		m.cursor = len(m.filtered) - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
 
-	items := make([]string, 0, len(m.entries))
-	for i, e := range m.entries {
+	items := make([]string, 0, len(m.filtered))
+	for visibleIndex, originalIndex := range m.filtered {
+		e := m.entries[originalIndex]
 		prefix := "  "
-		if i == m.cursor {
-			prefix = "> "
+		if visibleIndex == m.cursor {
+			prefix = tui.IconCursor + " "
 		}
-		items = append(items, fmt.Sprintf("%s[%s] %s", prefix, e.Status, e.Path))
+
+		status := e.Status
+		switch e.Status {
+		case "A":
+			status = lipgloss.NewStyle().Foreground(tui.ColorSuccess).Render("A")
+		case "D":
+			status = lipgloss.NewStyle().Foreground(tui.ColorError).Render("D")
+		case "M":
+			status = lipgloss.NewStyle().Foreground(tui.ColorWarning).Render("M")
+		}
+
+		line := fmt.Sprintf("%s[%s] %s", prefix, status, e.Path)
+		if visibleIndex == m.cursor {
+			line = tui.SelectedItemStyle.Render(line)
+		} else {
+			line = tui.ItemStyle.Render(line)
+		}
+		items = append(items, line)
 	}
 	m.list.SetContent(strings.Join(items, "\n"))
+	shared.EnsureItemVisible(&m.list, m.cursor)
 
-	selected := m.entries[m.cursor]
+	selected := m.entries[m.filtered[m.cursor]]
 	content := selected.Patch
 	if strings.TrimSpace(content) == "" {
 		content = "No patch content available."
 	}
-	m.diff.SetContent(content)
+	m.diff.SetContent(chunk.FormatDiff(content))
 	m.diff.GotoTop()
+}
+
+func (m *jumpPreviewModel) rebuildFilter() {
+	paths := make([]string, len(m.entries))
+	for i, e := range m.entries {
+		paths[i] = e.Path
+	}
+	m.filtered = shared.BuildFilteredIndices(paths, m.search.Value())
+	if len(m.filtered) == 0 {
+		m.cursor = 0
+		return
+	}
+	if m.cursor >= len(m.filtered) {
+		m.cursor = len(m.filtered) - 1
+	}
 }
 
 func resolveJumpUser(args []string) (string, error) {

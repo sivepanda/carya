@@ -190,6 +190,14 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	}
 
 	if event.Op&fsnotify.Remove == fsnotify.Remove {
+		if w.handler != nil && w.shouldTrackFile(event.Name) {
+			relPath, err := filepath.Rel(w.watchDir, event.Name)
+			if err != nil {
+				log.Printf("Failed to get relative path for deleted %s: %v", event.Name, err)
+				relPath = event.Name
+			}
+			w.handler.OnFileChange(relPath, nil)
+		}
 		w.fsWatcher.Remove(event.Name)
 	}
 }

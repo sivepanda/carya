@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -48,6 +49,12 @@ func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	active, exists := s.activeChunks[event.Path]
+	if event.Contents == nil {
+		s.handleDelete(event, active, exists)
+		return
+	}
+
 	// Store content as git blob
 	blobHash, err := s.hashContent(event.Contents)
 	if err != nil {
@@ -55,7 +62,6 @@ func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 		return
 	}
 
-	active, exists := s.activeChunks[event.Path]
 	if !exists {
 		// Use the shadow index entry (seeded from HEAD) as the baseline.
 		// For new files not in HEAD, baselineHash falls back to the new content hash.
@@ -66,9 +72,14 @@ func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 			}
 		}
 
+		if baselineHash == blobHash {
+			log.Printf("Ignoring unchanged file: %s", event.Path)
+			return
+		}
+
 		s.activeChunks[event.Path] = &activeChunk{
 			chunk: &Chunk{
-				ID:        ChunkID(fmt.Sprintf("%s-%d", event.Path, event.Time.Unix())),
+				ID:        ChunkID(fmt.Sprintf("%s-%d", event.Path, event.Time.UnixNano())),
 				FilePath:  event.Path,
 				StartTime: event.Time,
 				EndTime:   event.Time,
@@ -91,7 +102,15 @@ func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 	}
 
 	if active.initialBlobHash == blobHash {
-		log.Printf("Ignoring unchanged file: %s", event.Path)
+		if s.shadow != nil {
+			if active.initialBlobHash == "" {
+				_ = s.shadow.RemoveFromIndex(event.Path)
+			} else {
+				_ = s.shadow.UpdateIndex(event.Path, active.initialBlobHash, "100644")
+			}
+		}
+		delete(s.activeChunks, event.Path)
+		log.Printf("Discarded chunk with no net changes: %s", event.Path)
 		return
 	}
 
@@ -182,34 +201,34 @@ func (s *UnifiedStrategy) generateDiff(active *activeChunk) string {
 		return fmt.Sprintf("diff --git a/%s b/%s\nindex %s..%s\n--- a/%s\n+++ b/%s\n@@ changes not available (no shadow repo) @@\n",
 			chunk.FilePath,
 			chunk.FilePath,
-			active.initialBlobHash[:8],
-			active.latestBlobHash[:8],
+			shortHash(active.initialBlobHash),
+			shortHash(active.latestBlobHash),
 			chunk.FilePath,
 			chunk.FilePath)
 	}
 
 	// Get content for binary check
-	initialContent, _ := s.shadow.GetObjectContent(active.initialBlobHash)
-	latestContent, _ := s.shadow.GetObjectContent(active.latestBlobHash)
+	initialContent, _ := s.contentForHash(active.initialBlobHash)
+	latestContent, _ := s.contentForHash(active.latestBlobHash)
 
 	// Check if content is binary
 	if isBinary(initialContent) || isBinary(latestContent) {
 		return fmt.Sprintf("Binary file %s has changed\n(Initial hash: %s, Latest hash: %s)",
 			chunk.FilePath,
-			active.initialBlobHash[:8],
-			active.latestBlobHash[:8])
+			shortHash(active.initialBlobHash),
+			shortHash(active.latestBlobHash))
 	}
 
-	// Use git diff for text files
-	diff, err := s.shadow.DiffBlobsRaw(active.initialBlobHash, active.latestBlobHash)
+	// Use path-aware git diff for text files
+	diff, err := s.diffWithPath(chunk.FilePath, initialContent, latestContent)
 	if err != nil {
 		log.Printf("Failed to generate git diff for %s: %v", chunk.FilePath, err)
 		// Fall back to header-only diff
 		return fmt.Sprintf("diff --git a/%s b/%s\nindex %s..%s\n--- a/%s\n+++ b/%s\n@@ diff generation failed @@\n",
 			chunk.FilePath,
 			chunk.FilePath,
-			active.initialBlobHash[:8],
-			active.latestBlobHash[:8],
+			shortHash(active.initialBlobHash),
+			shortHash(active.latestBlobHash),
 			chunk.FilePath,
 			chunk.FilePath)
 	}
@@ -219,13 +238,104 @@ func (s *UnifiedStrategy) generateDiff(active *activeChunk) string {
 		return fmt.Sprintf("diff --git a/%s b/%s\nindex %s..%s\n--- a/%s\n+++ b/%s\n",
 			chunk.FilePath,
 			chunk.FilePath,
-			active.initialBlobHash[:8],
-			active.latestBlobHash[:8],
+			shortHash(active.initialBlobHash),
+			shortHash(active.latestBlobHash),
 			chunk.FilePath,
 			chunk.FilePath)
 	}
 
 	return diff
+}
+
+func (s *UnifiedStrategy) handleDelete(event FileChangeEvent, active *activeChunk, exists bool) {
+	baselineHash := ""
+	if exists {
+		baselineHash = active.initialBlobHash
+	} else if s.shadow != nil {
+		baselineHash, _ = s.shadow.GetIndexEntry(event.Path)
+	}
+
+	if baselineHash == "" {
+		// Deleting an untracked file creates no meaningful chunk.
+		return
+	}
+
+	if !exists {
+		active = &activeChunk{
+			chunk: &Chunk{
+				ID:        ChunkID(fmt.Sprintf("%s-%d", event.Path, event.Time.UnixNano())),
+				FilePath:  event.Path,
+				StartTime: event.Time,
+				EndTime:   event.Time,
+				Hash:      ChunkHash(fmt.Sprintf("deleted-%d", event.Time.UnixNano())),
+				Manual:    false,
+			},
+			lastUpdate:      event.Time,
+			initialBlobHash: baselineHash,
+			latestBlobHash:  "",
+		}
+		s.activeChunks[event.Path] = active
+	} else {
+		active.chunk.EndTime = event.Time
+		active.lastUpdate = event.Time
+		active.latestBlobHash = ""
+		active.chunk.Hash = ChunkHash(fmt.Sprintf("deleted-%d", event.Time.UnixNano()))
+	}
+
+	if s.shadow != nil {
+		_ = s.shadow.RemoveFromIndex(event.Path)
+	}
+}
+
+func (s *UnifiedStrategy) contentForHash(hash string) ([]byte, error) {
+	if hash == "" {
+		return nil, nil
+	}
+	return s.shadow.GetObjectContent(hash)
+}
+
+func (s *UnifiedStrategy) diffWithPath(filePath string, oldContent, newContent []byte) (string, error) {
+	oldPath := "/dev/null"
+	newPath := "/dev/null"
+
+	if oldContent != nil {
+		f, err := os.CreateTemp("", "carya-old-*")
+		if err != nil {
+			return "", err
+		}
+		defer os.Remove(f.Name())
+		if _, err := f.Write(oldContent); err != nil {
+			_ = f.Close()
+			return "", err
+		}
+		if err := f.Close(); err != nil {
+			return "", err
+		}
+		oldPath = f.Name()
+	}
+
+	if newContent != nil {
+		f, err := os.CreateTemp("", "carya-new-*")
+		if err != nil {
+			return "", err
+		}
+		defer os.Remove(f.Name())
+		if _, err := f.Write(newContent); err != nil {
+			_ = f.Close()
+			return "", err
+		}
+		if err := f.Close(); err != nil {
+			return "", err
+		}
+		newPath = f.Name()
+	}
+
+	diff, err := s.shadow.DiffFilesWithPath(oldPath, newPath, filePath)
+	if err != nil {
+		return "", err
+	}
+
+	return diff, nil
 }
 
 // isBinary checks if the content appears to be binary data.
@@ -269,4 +379,14 @@ func (s *UnifiedStrategy) WriteTree() (string, error) {
 // GetShadow returns the shadow repository.
 func (s *UnifiedStrategy) GetShadow() *git.ShadowRepo {
 	return s.shadow
+}
+
+func shortHash(hash string) string {
+	if len(hash) == 0 {
+		return "00000000"
+	}
+	if len(hash) < 8 {
+		return hash
+	}
+	return hash[:8]
 }

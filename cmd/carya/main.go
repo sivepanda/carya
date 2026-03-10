@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 
@@ -19,21 +20,34 @@ var rootCmd = &cobra.Command{
 	Use:   "carya",
 	Short: "Carya is a next-gen version control system.",
 	Long:  `A fast and powerful version control system built with a focus on developer experience and collaboration.`,
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		repo, err := repository.New()
-		if err != nil || !repo.Exists() {
-			return
+		if err != nil {
+			return nil
 		}
+
+		if !repo.Exists() {
+			if cmd.Name() != "init" {
+				return nil
+			}
+			if err := repo.EnsureExists(); err != nil {
+				return fmt.Errorf("failed to initialize log directory: %w", err)
+			}
+		}
+
 		f, err := os.OpenFile(repo.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
-			return
+			return fmt.Errorf("failed to open log file: %w", err)
 		}
 		globalLogFile = f
 		log.SetOutput(f)
+		return nil
 	},
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
 		if globalLogFile != nil {
 			globalLogFile.Close()
+			globalLogFile = nil
+			log.SetOutput(io.Discard)
 		}
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -53,6 +67,7 @@ func Execute() {
 // main is the entry point for the Carya CLI application.
 func init() {
 	mycelia.ConfigFile = "carya.json"
+	log.SetOutput(io.Discard)
 }
 
 func main() {
