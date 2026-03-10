@@ -27,7 +27,7 @@ func NewConflictPredictor(repoPath string) *ConflictPredictor {
 }
 
 func (c *ConflictPredictor) PredictConflicts(base, treeA, treeB string) (*ConflictReport, error) {
-	cmd := exec.Command("git", "merge-tree", "--write-tree", base, treeA, treeB)
+	cmd := exec.Command("git", "merge-tree", "--write-tree", "--merge-base", base, treeA, treeB)
 	cmd.Dir = c.repoPath
 
 	output, err := cmd.CombinedOutput()
@@ -53,10 +53,10 @@ func (c *ConflictPredictor) PredictConflicts(base, treeA, treeB string) (*Confli
 }
 
 var (
-	mergeConflictRe  = regexp.MustCompile(`(?i)Merge conflict in (.+)$`)
-	modifyDeleteRe   = regexp.MustCompile(`(?i)CONFLICT \(modify/delete\): (.+?) deleted in`)
-	renameDeleteRe   = regexp.MustCompile(`(?i)CONFLICT \(rename/delete\): (.+?) renamed`)
-	conflictTypeRe   = regexp.MustCompile(`CONFLICT \(([^)]+)\)`)
+	mergeConflictRe = regexp.MustCompile(`(?i)Merge conflict in (.+)$`)
+	modifyDeleteRe  = regexp.MustCompile(`(?i)CONFLICT \(modify/delete\): (.+?) deleted in`)
+	renameDeleteRe  = regexp.MustCompile(`(?i)CONFLICT \(rename/delete\): (.+?) renamed`)
+	conflictTypeRe  = regexp.MustCompile(`CONFLICT \(([^)]+)\)`)
 )
 
 func parseConflicts(output string) []ConflictedFile {

@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const defaultTeamRemote = "origin"
+
 // RefManager handles git ref operations for Carya user state sharing.
 type RefManager struct {
 	repoPath string // Path to the main git repository
@@ -42,20 +44,40 @@ func (r *RefManager) UpdateUserTreeRef(userID, treeHash string) error {
 	return nil
 }
 
-// GetUserTreeRef retrieves the tree hash for a user's ref.
-func (r *RefManager) GetUserTreeRef(userID string) (string, error) {
-	refPath := fmt.Sprintf("refs/carya/users/%s/tree", userID)
-
-	cmd := exec.Command("git", "show-ref", "--hash", refPath)
+func (r *RefManager) getTreeHashForRef(refPath string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", refPath+"^{tree}")
 	cmd.Dir = r.repoPath
 
 	output, err := cmd.Output()
 	if err != nil {
-		log.Printf("User ref not found: %s", userID)
-		return "", fmt.Errorf("user ref not found: %s", userID)
+		return "", err
 	}
 
 	return strings.TrimSpace(string(output)), nil
+}
+
+func (r *RefManager) getLocalUserTreeRef(userID string) (string, error) {
+	refPath := fmt.Sprintf("refs/carya/users/%s/tree", userID)
+	return r.getTreeHashForRef(refPath)
+}
+
+func (r *RefManager) getRemoteUserTreeRef(remote, userID string) (string, error) {
+	refPath := fmt.Sprintf("refs/remotes/%s/carya/users/%s/tree", remote, userID)
+	return r.getTreeHashForRef(refPath)
+}
+
+// GetUserTreeRef retrieves the tree hash for a user's ref.
+func (r *RefManager) GetUserTreeRef(userID string) (string, error) {
+	if hash, err := r.getLocalUserTreeRef(userID); err == nil {
+		return hash, nil
+	}
+
+	if hash, err := r.getRemoteUserTreeRef(defaultTeamRemote, userID); err == nil {
+		return hash, nil
+	}
+
+	log.Printf("User ref not found: %s", userID)
+	return "", fmt.Errorf("user ref not found: %s", userID)
 }
 
 // DeleteUserTreeRef removes a user's tree ref.
@@ -75,37 +97,56 @@ func (r *RefManager) DeleteUserTreeRef(userID string) error {
 
 // ListUserRefs returns all user refs in the repository.
 func (r *RefManager) ListUserRefs() ([]UserRef, error) {
-	cmd := exec.Command("git", "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/carya/users/")
-	cmd.Dir = r.repoPath
+	type refSource struct {
+		prefix string
+		local  bool
+	}
 
-	output, err := cmd.Output()
-	if err != nil {
-		// No refs exist yet
+	sources := []refSource{
+		{prefix: "refs/remotes/" + defaultTeamRemote + "/carya/users/", local: false},
+		{prefix: "refs/carya/users/", local: true},
+	}
+
+	byUser := make(map[string]UserRef)
+	for _, source := range sources {
+		cmd := exec.Command("git", "for-each-ref", "--format=%(refname)", source.prefix)
+		cmd.Dir = r.repoPath
+
+		output, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+
+		for _, refPath := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+			refPath = strings.TrimSpace(refPath)
+			if refPath == "" {
+				continue
+			}
+			userID := strings.TrimPrefix(refPath, source.prefix)
+			userID = strings.TrimSuffix(userID, "/tree")
+			if userID == "" || strings.Contains(userID, "/") {
+				continue
+			}
+
+			hash, err := r.getTreeHashForRef(refPath)
+			if err != nil {
+				continue
+			}
+
+			if _, exists := byUser[userID]; exists && !source.local {
+				continue
+			}
+			byUser[userID] = UserRef{UserID: userID, TreeHash: hash}
+		}
+	}
+
+	if len(byUser) == 0 {
 		return nil, nil
 	}
 
-	var refs []UserRef
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		// Format: carya/users/<user>/tree <hash>
-		parts := strings.Fields(line)
-		if len(parts) != 2 {
-			continue
-		}
-
-		// Extract user ID from ref path
-		refPath := parts[0]
-		// Remove "carya/users/" prefix and "/tree" suffix
-		userID := strings.TrimPrefix(refPath, "carya/users/")
-		userID = strings.TrimSuffix(userID, "/tree")
-
-		refs = append(refs, UserRef{
-			UserID:   userID,
-			TreeHash: parts[1],
-		})
+	refs := make([]UserRef, 0, len(byUser))
+	for _, ref := range byUser {
+		refs = append(refs, ref)
 	}
 
 	return refs, nil
@@ -161,7 +202,7 @@ func (r *RefManager) FetchCaryaRefs(remote string) error {
 		return fmt.Errorf("remote '%s' not found", remote)
 	}
 
-	cmd := exec.Command("git", "fetch", remote, "refs/carya/*:refs/carya/*")
+	cmd := exec.Command("git", "fetch", remote, "+refs/carya/*:refs/remotes/"+remote+"/carya/*")
 	cmd.Dir = r.repoPath
 
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -180,7 +221,7 @@ func (r *RefManager) FetchCaryaRefs(remote string) error {
 // PushUserRef pushes a user's tree ref to a remote.
 func (r *RefManager) PushUserRef(remote, userID string) error {
 	// Get the user's current tree hash
-	treeHash, err := r.GetUserTreeRef(userID)
+	treeHash, err := r.getLocalUserTreeRef(userID)
 	if err != nil {
 		return fmt.Errorf("failed to get user tree ref: %w", err)
 	}
