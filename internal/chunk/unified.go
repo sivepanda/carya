@@ -64,15 +64,13 @@ func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 
 	if !exists {
 		// Use the shadow index entry (seeded from HEAD) as the baseline.
-		// For new files not in HEAD, baselineHash falls back to the new content hash.
-		baselineHash := blobHash
+		// For files not in HEAD, keep an empty baseline so additions are tracked.
+		baselineHash := ""
 		if s.shadow != nil {
-			if existing, _ := s.shadow.GetIndexEntry(event.Path); existing != "" {
-				baselineHash = existing
-			}
+			baselineHash, _ = s.shadow.GetIndexEntry(event.Path)
 		}
 
-		if baselineHash == blobHash {
+		if baselineHash != "" && baselineHash == blobHash {
 			log.Printf("Ignoring unchanged file: %s", event.Path)
 			return
 		}
