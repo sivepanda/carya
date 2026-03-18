@@ -4,6 +4,7 @@ package engine
 
 import (
 	"carya/internal/chunk"
+	"carya/internal/config"
 	"carya/internal/git"
 	"carya/internal/identity"
 	"carya/internal/store"
@@ -35,7 +36,7 @@ func (e *SimpleEventEmitter) EmitChunkFlushed(chunks []chunk.Chunk) {
 }
 
 // NewEngine creates a new Carya engine with SQLite storage at the specified path.
-// It initializes the chunk manager with a unified strategy and simple event emitter.
+// It initializes the chunk manager with a git-backed strategy and simple event emitter.
 func NewEngine(storePath string) (*Engine, error) {
 	chunkStore, err := store.NewSQLiteStore(storePath)
 	if err != nil {
@@ -43,9 +44,9 @@ func NewEngine(storePath string) (*Engine, error) {
 	}
 
 	// Create strategy without shadow repo for backwards compatibility
-	strategy := chunk.NewUnifiedStrategy(nil)
+	strategy := chunk.NewGitStrategy(nil)
 	emitter := &SimpleEventEmitter{}
-	manager := chunk.NewManager(strategy, chunkStore, emitter)
+	manager := chunk.NewManager(strategy, chunkStore, emitter, managerOptionsFromGlobalConfig())
 
 	return &Engine{
 		chunkManager: manager,
@@ -54,7 +55,7 @@ func NewEngine(storePath string) (*Engine, error) {
 }
 
 // NewEngineWithShadow creates a new Carya engine with shadow repository support.
-func NewEngineWithShadow(storePath, shadowPath, repoRoot, caryaPath string) (*Engine, error) {
+func NewEngineWithShadow(storePath, repoRoot, caryaPath string) (*Engine, error) {
 	chunkStore, err := store.NewSQLiteStore(storePath)
 	if err != nil {
 		return nil, err
@@ -81,9 +82,9 @@ func NewEngineWithShadow(storePath, shadowPath, repoRoot, caryaPath string) (*En
 	}
 
 	// Create strategy with shadow repo
-	strategy := chunk.NewUnifiedStrategy(shadow)
+	strategy := chunk.NewGitStrategy(shadow)
 	emitter := &SimpleEventEmitter{}
-	manager := chunk.NewManager(strategy, chunkStore, emitter)
+	manager := chunk.NewManager(strategy, chunkStore, emitter, managerOptionsFromGlobalConfig())
 
 	return &Engine{
 		chunkManager: manager,
@@ -158,4 +159,19 @@ func (e *Engine) GetRefManager() *git.RefManager {
 // GetUserID returns the user identifier.
 func (e *Engine) GetUserID() string {
 	return e.userID
+}
+
+func managerOptionsFromGlobalConfig() chunk.ManagerOptions {
+	opts := chunk.DefaultManagerOptions()
+
+	globalCfg, err := config.LoadGlobalConfig()
+	if err != nil {
+		log.Printf("Warning: failed to load global config for flush settings: %v", err)
+		return opts
+	}
+
+	hot, cold := globalCfg.FlushIntervals()
+	opts.BaseInterval = hot
+	opts.MaxInterval = cold
+	return opts
 }

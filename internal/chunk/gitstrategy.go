@@ -17,9 +17,8 @@ const (
 	DefaultFlushTimeout = 15 * time.Minute
 )
 
-// UnifiedStrategy implements a chunking strategy that groups file changes by time periods.
-// It uses git blobs for content storage instead of in-memory storage.
-type UnifiedStrategy struct {
+// GitStrategy implements a git-backed chunking strategy.
+type GitStrategy struct {
 	mu           sync.RWMutex            // Protects concurrent access
 	activeChunks map[string]*activeChunk // Active chunks by file path
 	flushTimeout time.Duration           // Time before chunks are considered stale
@@ -34,10 +33,10 @@ type activeChunk struct {
 	latestBlobHash  string    // Git blob hash of latest content
 }
 
-// NewUnifiedStrategy creates a new unified chunking strategy with default settings.
-// If shadow is nil, falls back to basic hash tracking without diffs.
-func NewUnifiedStrategy(shadow *git.ShadowRepo) *UnifiedStrategy {
-	return &UnifiedStrategy{
+// NewGitStrategy creates a new git-backed chunking strategy.
+// If shadow is nil, it falls back to basic hash tracking without diffs.
+func NewGitStrategy(shadow *git.ShadowRepo) *GitStrategy {
+	return &GitStrategy{
 		activeChunks: make(map[string]*activeChunk),
 		flushTimeout: DefaultFlushTimeout,
 		shadow:       shadow,
@@ -45,7 +44,7 @@ func NewUnifiedStrategy(shadow *git.ShadowRepo) *UnifiedStrategy {
 }
 
 // OnFileChange processes a file change event, creating or updating chunks as needed.
-func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
+func (s *GitStrategy) OnFileChange(event FileChangeEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -128,7 +127,7 @@ func (s *UnifiedStrategy) OnFileChange(event FileChangeEvent) {
 }
 
 // FlushStaleChunks returns chunks that haven't been updated within the flush timeout.
-func (s *UnifiedStrategy) FlushStaleChunks(now time.Time) []Chunk {
+func (s *GitStrategy) FlushStaleChunks(now time.Time) []Chunk {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -145,7 +144,7 @@ func (s *UnifiedStrategy) FlushStaleChunks(now time.Time) []Chunk {
 }
 
 // FlushAll immediately flushes all active chunks regardless of age.
-func (s *UnifiedStrategy) FlushAll() []Chunk {
+func (s *GitStrategy) FlushAll() []Chunk {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -160,7 +159,7 @@ func (s *UnifiedStrategy) FlushAll() []Chunk {
 }
 
 // ForceFlush immediately creates a chunk for the specified file path.
-func (s *UnifiedStrategy) ForceFlush(filePath string) *Chunk {
+func (s *GitStrategy) ForceFlush(filePath string) *Chunk {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -179,7 +178,7 @@ func (s *UnifiedStrategy) ForceFlush(filePath string) *Chunk {
 
 // hashContent stores content as a git blob and returns its hash.
 // Falls back to SHA256 if shadow repo is not available.
-func (s *UnifiedStrategy) hashContent(content []byte) (string, error) {
+func (s *GitStrategy) hashContent(content []byte) (string, error) {
 	if s.shadow != nil {
 		return s.shadow.HashObject(content)
 	}
@@ -191,7 +190,7 @@ func (s *UnifiedStrategy) hashContent(content []byte) (string, error) {
 }
 
 // generateDiff creates a unified diff representation for a chunk using git diff.
-func (s *UnifiedStrategy) generateDiff(active *activeChunk) string {
+func (s *GitStrategy) generateDiff(active *activeChunk) string {
 	chunk := active.chunk
 
 	// If no shadow repo, generate a simple diff header
@@ -245,7 +244,7 @@ func (s *UnifiedStrategy) generateDiff(active *activeChunk) string {
 	return diff
 }
 
-func (s *UnifiedStrategy) handleDelete(event FileChangeEvent, active *activeChunk, exists bool) {
+func (s *GitStrategy) handleDelete(event FileChangeEvent, active *activeChunk, exists bool) {
 	baselineHash := ""
 	if exists {
 		baselineHash = active.initialBlobHash
@@ -285,14 +284,14 @@ func (s *UnifiedStrategy) handleDelete(event FileChangeEvent, active *activeChun
 	}
 }
 
-func (s *UnifiedStrategy) contentForHash(hash string) ([]byte, error) {
+func (s *GitStrategy) contentForHash(hash string) ([]byte, error) {
 	if hash == "" {
 		return nil, nil
 	}
 	return s.shadow.GetObjectContent(hash)
 }
 
-func (s *UnifiedStrategy) diffWithPath(filePath string, oldContent, newContent []byte) (string, error) {
+func (s *GitStrategy) diffWithPath(filePath string, oldContent, newContent []byte) (string, error) {
 	oldPath := "/dev/null"
 	newPath := "/dev/null"
 
@@ -363,20 +362,6 @@ func isBinary(content []byte) bool {
 	}
 
 	return float64(nonPrintable)/float64(sampleSize) > 0.3
-}
-
-// WriteTree writes the current shadow index as a tree and returns its hash.
-func (s *UnifiedStrategy) WriteTree() (string, error) {
-	if s.shadow == nil {
-		log.Printf("Shadow repo not initialized")
-		return "", fmt.Errorf("shadow repo not initialized")
-	}
-	return s.shadow.WriteTree()
-}
-
-// GetShadow returns the shadow repository.
-func (s *UnifiedStrategy) GetShadow() *git.ShadowRepo {
-	return s.shadow
 }
 
 func shortHash(hash string) string {

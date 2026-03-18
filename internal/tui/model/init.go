@@ -1,27 +1,36 @@
 package model
 
 import (
+	"carya/internal/config"
+	"carya/internal/identity"
 	"carya/internal/tui"
 	"carya/internal/tui/shared"
 	"fmt"
+	"strings"
 
 	initializer "carya/internal/init"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // Screen states
 const (
 	StateWelcome = iota
+	StateGlobalDevice
 	StateFeatureSelect
 	StateConfirm
 	StateExecute
 	StateComplete
 )
+
+var globalConfigExistsFn = config.GlobalConfigExists
+var saveGlobalConfigFn = config.SaveGlobalConfig
+var defaultDeviceIDFn = identity.DefaultDeviceID
 
 // Feature options
 type Feature struct {
@@ -52,6 +61,9 @@ type Init struct {
 	err                error
 	featureErrors      map[string]error
 	launchHousekeeping bool
+	needsGlobalSetup   bool
+	globalSetupError   string
+	deviceInput        textinput.Model
 }
 
 // NewInit creates a new init model
@@ -71,6 +83,13 @@ func NewInit() Init {
 		selectedFeatures: make(map[string]bool),
 		confirmSelection: true, // Default to Yes
 	}
+
+	m.needsGlobalSetup = !globalConfigExistsFn()
+	m.deviceInput = textinput.New()
+	m.deviceInput.Prompt = "Device ID: "
+	m.deviceInput.CharLimit = 120
+	m.deviceInput.SetWidth(42)
+	m.deviceInput.SetValue(defaultDeviceIDFn())
 
 	return m
 }
@@ -148,6 +167,31 @@ func (m *Init) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.state == StateGlobalDevice {
+			switch {
+			case key.Matches(msg, m.keys.Enter):
+				deviceID := strings.TrimSpace(m.deviceInput.Value())
+				if deviceID == "" {
+					m.globalSetupError = "Device ID cannot be empty"
+					return m, nil
+				}
+
+				if err := saveGlobalConfigFn(config.GlobalConfig{DeviceID: deviceID}); err != nil {
+					m.globalSetupError = fmt.Sprintf("Failed to save global settings: %v", err)
+					return m, nil
+				}
+
+				m.globalSetupError = ""
+				m.state = StateFeatureSelect
+				m.deviceInput.Blur()
+				return m, nil
+			}
+
+			var inputCmd tea.Cmd
+			m.deviceInput, inputCmd = m.deviceInput.Update(msg)
+			return m, inputCmd
+		}
+
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
@@ -183,6 +227,11 @@ func (m *Init) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Enter):
 			switch m.state {
 			case StateWelcome:
+				if m.needsGlobalSetup {
+					m.state = StateGlobalDevice
+					m.deviceInput.Focus()
+					return m, textinput.Blink
+				}
 				m.state = StateFeatureSelect
 				return m, nil
 
@@ -231,7 +280,7 @@ func (m *Init) getSelectedFeatures() []string {
 }
 
 // View renders the model
-func (m *Init) View() string {
+func (m *Init) View() tea.View {
 	var content string
 
 	switch m.state {
@@ -288,6 +337,26 @@ func (m *Init) View() string {
 		instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", featuresBox, instructions)
+
+	case StateGlobalDevice:
+		title := tui.TitleStyle.Render("⚙ GLOBAL DEVICE SETUP")
+		desc := tui.HelpDescStyle.Render("This setting is shared across all Carya projects on this machine.")
+		desc2 := tui.SubtleTextStyle.Render("Shown in team views as: username (device-id)")
+
+		inputBlock := tui.ActiveBoxStyle.Width(72).Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				tui.TextStyle.Render("Choose a global device id:"),
+				"",
+				m.deviceInput.View(),
+			),
+		)
+
+		instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("type value • enter continue")
+		if m.globalSetupError != "" {
+			instructions = tui.ErrorStyle.Render(m.globalSetupError)
+		}
+
+		content = lipgloss.JoinVertical(lipgloss.Left, title, "", desc, desc2, "", inputBlock, instructions)
 
 	case StateConfirm:
 		title := tui.TitleStyle.Render("✓ CONFIRM SELECTION")
@@ -464,8 +533,12 @@ func (m *Init) View() string {
 		m.help.ShowAll = true
 		helpView := m.help.View(m.keys)
 		help := tui.HelpStyle.Render(helpView)
-		return lipgloss.JoinVertical(lipgloss.Left, content, help)
+		v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, content, help))
+		v.AltScreen = true
+		return v
 	}
 
-	return content
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
 }

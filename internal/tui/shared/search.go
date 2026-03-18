@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // BuildFilteredIndices returns stable indices matching a case-insensitive query.
@@ -22,6 +22,19 @@ func BuildFilteredIndices(candidates []string, query string) []int {
 
 // RenderSearchBar renders a prominent search/filter bar for list-style TUIs.
 func RenderSearchBar(searching bool, searchView, query string, shown, total, width int) string {
+	barStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(tui.ColorBorderAccent).
+		Background(tui.ColorSubtle).
+		Padding(0, 1)
+
+	frameWidth, _ := barStyle.GetFrameSize()
+	minWidth := frameWidth + 1
+	if width < minWidth {
+		width = minWidth
+	}
+	innerWidth := width - frameWidth
+
 	left := tui.HelpKeyStyle.Render("/") + tui.HelpDescStyle.Render(" filter files")
 	if searching {
 		left = tui.WarningStyle.Render("FILTER MODE") + tui.SubtleTextStyle.Render("  ") + searchView
@@ -32,30 +45,43 @@ func RenderSearchBar(searching bool, searchView, query string, shown, total, wid
 	}
 
 	right := tui.SubtleTextStyle.Render(fmt.Sprintf("showing %d/%d", shown, total))
-	content := left + tui.SubtleTextStyle.Render("   ") + right
-	if width > 4 {
-		innerWidth := width - 4
-		space := innerWidth - lipgloss.Width(left) - lipgloss.Width(right)
+
+	leftWidth := lipgloss.Width(left)
+	rightWidth := lipgloss.Width(right)
+
+	if rightWidth >= innerWidth {
+		right = truncateStyled(right, innerWidth)
+		left = ""
+		leftWidth = 0
+		rightWidth = lipgloss.Width(right)
+	}
+
+	space := innerWidth - leftWidth - rightWidth
+	if space < 1 {
+		maxLeft := innerWidth - rightWidth - 1
+		if maxLeft < 0 {
+			maxLeft = 0
+		}
+		left = truncateStyled(left, maxLeft)
+		leftWidth = lipgloss.Width(left)
+		space = innerWidth - leftWidth - rightWidth
 		if space < 1 {
 			space = 1
 		}
-		content = left + strings.Repeat(" ", space) + right
 	}
 
-	bar := lipgloss.NewStyle().
-		Width(max(width, lipgloss.Width(content)+4)).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(tui.ColorBorderAccent).
-		Background(tui.ColorSubtle).
-		Padding(0, 1).
+	content := left + strings.Repeat(" ", space) + right
+
+	bar := barStyle.
+		Width(innerWidth).
 		Render(content)
 
 	return bar
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
+func truncateStyled(value string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
 	}
-	return b
+	return lipgloss.NewStyle().MaxWidth(maxWidth).Render(value)
 }

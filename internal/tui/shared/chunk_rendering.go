@@ -3,8 +3,9 @@ package shared
 import (
 	"carya/internal/chunk"
 	"fmt"
+	"image/color"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // RenderChunkHeader creates a formatted header for a chunk with file path and time range
@@ -22,7 +23,7 @@ func RenderChunkHeader(c chunk.Chunk, subtleStyle, boldStyle lipgloss.Style) str
 }
 
 // RenderDiffPanel creates a bordered panel with diff content
-func RenderDiffPanel(header, viewportContent string, width, height int, borderColor lipgloss.Color) string {
+func RenderDiffPanel(header, viewportContent string, width, height int, borderColor color.Color) string {
 	diffStyle := lipgloss.NewStyle().
 		Width(width).
 		Height(height).

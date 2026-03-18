@@ -4,9 +4,9 @@ import (
 	"carya/internal/repository"
 	"carya/internal/tui"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 	primitives "github.com/sivepanda/mycelia/tui"
 )
 
@@ -138,12 +138,14 @@ func (m Housekeeping) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // View renders the setup wizard with carya's help bar.
-func (m Housekeeping) View() string {
+func (m Housekeeping) View() tea.View {
 	content := m.setup.View()
 
 	m.help.ShowAll = m.showAll
 	helpView := m.help.View(m.keys)
 	helpText := tui.HelpStyle.Render(helpView)
 
-	return content + "\n" + helpText
+	v := tea.NewView(content + "\n" + helpText)
+	v.AltScreen = true
+	return v
 }

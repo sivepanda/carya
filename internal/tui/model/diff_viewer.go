@@ -10,13 +10,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // DiffViewer represents the Bubble Tea model for viewing diffs
@@ -72,7 +72,7 @@ func NewDiffViewer(store ChunkStore) (*DiffViewer, error) {
 	search.Prompt = "search: "
 	search.Placeholder = "type file path..."
 	search.CharLimit = 200
-	search.Width = 36
+	search.SetWidth(36)
 	m.search = search
 	m.rebuildFilter()
 
@@ -126,48 +126,27 @@ func (m *DiffViewer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.searching {
-			switch msg.String() {
-			case "esc", "enter":
-				m.searching = false
-				m.search.Blur()
+		nav := shared.HandleSplitPaneNavigation(
+			msg,
+			&m.searching,
+			&m.search,
+			&m.cursor,
+			len(m.filtered),
+			&m.diffViewport,
+			key.Matches(msg, m.keys.Up),
+			key.Matches(msg, m.keys.Down),
+			func() { m.rebuildFilter() },
+		)
+		if nav.Handled {
+			if nav.NeedsRefresh {
 				m.updateDiffContent()
-				return m, nil
 			}
-
-			var cmd tea.Cmd
-			m.search, cmd = m.search.Update(msg)
-			m.rebuildFilter()
-			m.updateDiffContent()
-			return m, cmd
+			return m, nav.Cmd
 		}
 
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
-
-		case msg.String() == "/":
-			m.searching = true
-			m.search.Focus()
-			return m, textinput.Blink
-
-		case key.Matches(msg, m.keys.Up):
-			if m.cursor > 0 && len(m.filtered) > 0 {
-				m.cursor--
-				m.updateDiffContent()
-			}
-
-		case key.Matches(msg, m.keys.Down):
-			if m.cursor < len(m.filtered)-1 && len(m.filtered) > 0 {
-				m.cursor++
-				m.updateDiffContent()
-			}
-
-		// Allow scrolling the diff with Ctrl+d and Ctrl+u
-		case msg.String() == "ctrl+d":
-			m.diffViewport.ViewDown()
-		case msg.String() == "ctrl+u":
-			m.diffViewport.ViewUp()
 		}
 	}
 
@@ -182,7 +161,9 @@ func (m *DiffViewer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // View renders the model
-func (m *DiffViewer) View() string {
+func (m *DiffViewer) View() tea.View {
+	var s string
+
 	if m.err != nil {
 		title := tui.ErrorStyle.Render("✗ ERROR")
 		errorMsg := tui.ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
@@ -195,16 +176,18 @@ func (m *DiffViewer) View() string {
 			Render(errorMsg)
 
 		instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("q quit")
-		return lipgloss.JoinVertical(lipgloss.Center, title, "", errorBox, instructions)
-	}
-
-	if !m.ready {
+		s = lipgloss.JoinVertical(lipgloss.Center, title, "", errorBox, instructions)
+	} else if !m.ready {
 		loadingText := tui.TextStyle.Render(" Loading...")
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+		s = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			lipgloss.JoinHorizontal(lipgloss.Center, m.spinner.View(), loadingText))
+	} else {
+		s = m.renderSplitView()
 	}
 
-	return m.renderSplitView()
+	v := tea.NewView(s)
+	v.AltScreen = true
+	return v
 }
 
 // renderSplitView renders the telescope-style split view
@@ -224,14 +207,6 @@ func (m *DiffViewer) renderSplitView() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 	}
 
-	// Render both panels
-	listPanel := m.renderChunkListPanel()
-	diffPanel := m.renderDiffPanel()
-
-	// Join horizontally
-	content := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, diffPanel)
-
-	// Add footer with better formatting
 	navHelp := tui.HelpKeyStyle.Render("↑/↓") + tui.HelpDescStyle.Render(" navigate")
 	searchHelp := tui.HelpKeyStyle.Render("/") + tui.HelpDescStyle.Render(" search")
 	scrollHelp := tui.HelpKeyStyle.Render("ctrl+d/u") + tui.HelpDescStyle.Render(" scroll")
@@ -247,11 +222,27 @@ func (m *DiffViewer) renderSplitView() string {
 		Padding(0, 1).
 		Render(navHelp + " • " + searchHelp + " • " + scrollHelp + " • " + quitHelp + " • " + counter)
 
+	paneHeight := m.height - lipgloss.Height(searchBar) - lipgloss.Height(footer) - 5
+	if paneHeight < 1 {
+		paneHeight = 1
+	}
+
+	// Render both panels
+	listPanel := m.renderChunkListPanel(paneHeight)
+	diffPanel := m.renderDiffPanel(paneHeight)
+
+	// Join horizontally
+	content := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, diffPanel)
+
 	return lipgloss.JoinVertical(lipgloss.Left, searchBar, content, footer)
 }
 
 // renderChunkListPanel renders the left panel with chunk list
-func (m *DiffViewer) renderChunkListPanel() string {
+func (m *DiffViewer) renderChunkListPanel(height int) string {
+	listViewportWidth, listViewportHeight := shared.TitledPanelViewportSize(m.listWidth, height, 0)
+	m.listViewport.SetWidth(listViewportWidth)
+	m.listViewport.SetHeight(listViewportHeight)
+
 	var items []string
 	for visibleIndex, idx := range m.filtered {
 		c := m.chunks[idx]
@@ -284,19 +275,27 @@ func (m *DiffViewer) renderChunkListPanel() string {
 	// Ensure selected item is visible
 	shared.EnsureItemVisible(&m.listViewport, m.cursor)
 
-	return shared.RenderTitledPanel("CHUNKS", m.listViewport.View(), m.listWidth, m.height, tui.ColorBorder)
+	return shared.RenderTitledPanel("CHUNKS", m.listViewport.View(), m.listWidth, height, tui.ColorBorder)
 }
 
 // renderDiffPanel renders the right panel with diff content
-func (m *DiffViewer) renderDiffPanel() string {
+func (m *DiffViewer) renderDiffPanel(height int) string {
 	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
-		return ""
+		empty := tui.SubtleTextStyle.Render("No files match filter")
+		diffViewportWidth, diffViewportHeight := shared.TitledPanelViewportSize(m.diffWidth, height, 0)
+		m.diffViewport.SetWidth(diffViewportWidth)
+		m.diffViewport.SetHeight(diffViewportHeight)
+		m.diffViewport.SetContent(empty)
+		return shared.RenderTitledPanel("DIFF", m.diffViewport.View(), m.diffWidth, height, tui.ColorTitle)
 	}
 
 	c := m.chunks[m.filtered[m.cursor]]
 	header := shared.RenderChunkHeader(c, tui.SubtleTextStyle, tui.TextStyle.Bold(true))
+	diffViewportWidth, diffViewportHeight := shared.TitledPanelViewportSize(m.diffWidth, height, lipgloss.Height(header))
+	m.diffViewport.SetWidth(diffViewportWidth)
+	m.diffViewport.SetHeight(diffViewportHeight)
 	content := lipgloss.JoinVertical(lipgloss.Left, header, m.diffViewport.View())
-	return shared.RenderTitledPanel("DIFF", content, m.diffWidth, m.height, tui.ColorTitle)
+	return shared.RenderTitledPanel("DIFF", content, m.diffWidth, height, tui.ColorTitle)
 }
 
 // updateDiffContent updates the diff viewport with the current chunk's diff
@@ -374,7 +373,7 @@ func RunDiffViewer(dataSourceName string) error {
 	}
 
 	// Run the program
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		log.Printf("Error running program: %v", err)
 		return fmt.Errorf("error running diff viewer: %w", err)

@@ -61,7 +61,16 @@ func CleanupDiffForGit(c chunk.Chunk) (string, []string) {
 }
 
 func Apply(patch string) error {
-	applyCmd := exec.Command("git", "apply", "--index", "-")
+	return runApply([]string{"--cached", "-"}, patch)
+}
+
+func CheckApply(patch string) error {
+	return runApply([]string{"--check", "--cached", "-"}, patch)
+}
+
+func runApply(args []string, patch string) error {
+	applyArgs := append([]string{"apply"}, args...)
+	applyCmd := exec.Command("git", applyArgs...)
 	applyCmd.Stdin = strings.NewReader(patch)
 
 	if output, err := applyCmd.CombinedOutput(); err != nil {

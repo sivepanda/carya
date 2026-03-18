@@ -42,9 +42,9 @@ func makeShadowReadyRepo(t *testing.T) (string, *git.ShadowRepo) {
 	return repo, shadow
 }
 
-func TestUnifiedStrategyOnFileChangeAndForceFlush(t *testing.T) {
+func TestGitStrategyOnFileChangeAndForceFlush(t *testing.T) {
 	_, shadow := makeShadowReadyRepo(t)
-	s := NewUnifiedStrategy(shadow)
+	s := NewGitStrategy(shadow)
 	now := time.Now()
 
 	s.OnFileChange(FileChangeEvent{Path: "tracked.txt", Contents: []byte("base\nnext\n"), Time: now})
@@ -63,9 +63,9 @@ func TestUnifiedStrategyOnFileChangeAndForceFlush(t *testing.T) {
 	}
 }
 
-func TestUnifiedStrategyRevertDropsNetNoChange(t *testing.T) {
+func TestGitStrategyRevertDropsNetNoChange(t *testing.T) {
 	_, shadow := makeShadowReadyRepo(t)
-	s := NewUnifiedStrategy(shadow)
+	s := NewGitStrategy(shadow)
 	now := time.Now()
 
 	s.OnFileChange(FileChangeEvent{Path: "tracked.txt", Contents: []byte("base\nnext\n"), Time: now})
@@ -76,9 +76,9 @@ func TestUnifiedStrategyRevertDropsNetNoChange(t *testing.T) {
 	}
 }
 
-func TestUnifiedStrategyDeleteFromTrackedFile(t *testing.T) {
+func TestGitStrategyDeleteFromTrackedFile(t *testing.T) {
 	_, shadow := makeShadowReadyRepo(t)
-	s := NewUnifiedStrategy(shadow)
+	s := NewGitStrategy(shadow)
 	now := time.Now()
 
 	s.OnFileChange(FileChangeEvent{Path: "tracked.txt", Contents: nil, Time: now})
@@ -91,9 +91,9 @@ func TestUnifiedStrategyDeleteFromTrackedFile(t *testing.T) {
 	}
 }
 
-func TestUnifiedStrategyTracksNewUnversionedFile(t *testing.T) {
+func TestGitStrategyTracksNewUnversionedFile(t *testing.T) {
 	_, shadow := makeShadowReadyRepo(t)
-	s := NewUnifiedStrategy(shadow)
+	s := NewGitStrategy(shadow)
 	now := time.Now()
 
 	s.OnFileChange(FileChangeEvent{Path: "new.txt", Contents: []byte("hello\n"), Time: now})

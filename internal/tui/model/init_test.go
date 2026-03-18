@@ -4,30 +4,40 @@ import (
 	"errors"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
+func withGlobalConfigExists(t *testing.T, exists bool) {
+	t.Helper()
+	old := globalConfigExistsFn
+	globalConfigExistsFn = func() bool { return exists }
+	t.Cleanup(func() {
+		globalConfigExistsFn = old
+	})
+}
+
 func keyEnter() tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyEnter}
+	return tea.KeyPressMsg{Code: tea.KeyEnter}
 }
 
 func keyDown() tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyDown}
+	return tea.KeyPressMsg{Code: tea.KeyDown}
 }
 
 func keyUp() tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyUp}
+	return tea.KeyPressMsg{Code: tea.KeyUp}
 }
 
 func keySelectX() tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}
+	return tea.KeyPressMsg{Code: 'x', Text: "x"}
 }
 
 func keyHelp() tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}}
+	return tea.KeyPressMsg{Code: '?', Text: "?"}
 }
 
 func TestNewInitDefaults(t *testing.T) {
+	withGlobalConfigExists(t, true)
 	m := NewInit()
 
 	if m.state != StateWelcome {
@@ -45,6 +55,7 @@ func TestNewInitDefaults(t *testing.T) {
 }
 
 func TestInitFlowFeatureSelectionAndBack(t *testing.T) {
+	withGlobalConfigExists(t, true)
 	m := NewInit()
 
 	if _, cmd := m.Update(keyEnter()); cmd != nil {
@@ -84,6 +95,7 @@ func TestInitFlowFeatureSelectionAndBack(t *testing.T) {
 }
 
 func TestInitFlowConfirmReturnsExecuteCommand(t *testing.T) {
+	withGlobalConfigExists(t, true)
 	m := NewInit()
 
 	m.Update(keyEnter()) // welcome -> feature select
@@ -102,6 +114,7 @@ func TestInitFlowConfirmReturnsExecuteCommand(t *testing.T) {
 }
 
 func TestInitUpdateWithFormSubmittedMsg(t *testing.T) {
+	withGlobalConfigExists(t, true)
 	m := NewInit()
 	featureErr := errors.New("boom")
 
@@ -125,6 +138,7 @@ func TestInitUpdateWithFormSubmittedMsg(t *testing.T) {
 }
 
 func TestInitWindowResizeAndHelpToggle(t *testing.T) {
+	withGlobalConfigExists(t, true)
 	m := NewInit()
 
 	m.Update(tea.WindowSizeMsg{Width: 123, Height: 45})
@@ -146,6 +160,7 @@ func TestInitWindowResizeAndHelpToggle(t *testing.T) {
 }
 
 func TestInitConfirmSelectionTogglesWithUpDown(t *testing.T) {
+	withGlobalConfigExists(t, true)
 	m := NewInit()
 	m.state = StateConfirm
 	m.confirmSelection = true

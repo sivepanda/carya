@@ -5,8 +5,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strings"
+
+	"carya/internal/git"
 
 	"github.com/sivepanda/mycelia"
 
@@ -68,107 +68,19 @@ func pullFromGit() (bool, []string, error) {
 		return false, nil, fmt.Errorf("failed to get config path: %w", err)
 	}
 
-	wd, err := os.Getwd()
-	if err != nil {
-		log.Printf("Failed to get working directory: %v", err)
-		return false, nil, fmt.Errorf("failed to get working directory: %w", err)
-	}
+	return git.TrackConfigChange(configPath, func(wd string) error {
+		fmt.Println("Pulling from git...")
+		pullCmd := exec.Command("git", "pull")
+		pullCmd.Stdout = os.Stdout
+		pullCmd.Stderr = os.Stderr
+		pullCmd.Dir = wd
 
-	relPath, err := filepath.Rel(wd, configPath)
-	if err != nil {
-		log.Printf("Failed to get relative path: %v", err)
-		return false, nil, fmt.Errorf("failed to get relative path: %w", err)
-	}
-
-	// Get the hash of carya.json before pull
-	beforeHash, _ := getFileHash(relPath)
-
-	// Get the current HEAD commit before pull
-	beforeCommit, err := getHeadCommit()
-	if err != nil {
-		log.Printf("Failed to get HEAD commit: %v", err)
-		return false, nil, fmt.Errorf("failed to get HEAD commit: %w", err)
-	}
-
-	// Execute git pull
-	fmt.Println("Pulling from git...")
-	pullCmd := exec.Command("git", "pull")
-	pullCmd.Stdout = os.Stdout
-	pullCmd.Stderr = os.Stderr
-	pullCmd.Dir = wd
-
-	if err := pullCmd.Run(); err != nil {
-		log.Printf("Git pull failed: %v", err)
-		return false, nil, fmt.Errorf("git pull failed: %w", err)
-	}
-
-	// Get the hash of carya.json after pull
-	afterHash, _ := getFileHash(relPath)
-
-	// Check if the file changed
-	housekeepingChanged := beforeHash != "" && afterHash != "" && beforeHash != afterHash
-
-	// Get the list of changed files
-	changedFiles, err := getChangedFiles(beforeCommit)
-	if err != nil {
-		// Don't fail if we can't get changed files, just return empty list
-		changedFiles = []string{}
-	}
-
-	return housekeepingChanged, changedFiles, nil
-}
-
-// getFileHash returns the git hash of a file
-func getFileHash(filepath string) (string, error) {
-	cmd := exec.Command("git", "hash-object", filepath)
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-
-	return strings.TrimSpace(string(output)), nil
-}
-
-// getHeadCommit returns the current HEAD commit hash
-func getHeadCommit() (string, error) {
-	cmd := exec.Command("git", "rev-parse", "HEAD")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-
-	return strings.TrimSpace(string(output)), nil
-}
-
-// getChangedFiles returns the list of files changed between a commit and HEAD
-func getChangedFiles(fromCommit string) ([]string, error) {
-	currentCommit, err := getHeadCommit()
-	if err != nil {
-		return nil, err
-	}
-
-	// If commits are the same, no changes occurred
-	if fromCommit == currentCommit {
-		return []string{}, nil
-	}
-
-	// Get the list of changed files using git diff
-	cmd := exec.Command("git", "diff", "--name-only", fromCommit, currentCommit)
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-
-	files := strings.Split(strings.TrimSpace(string(output)), "\n")
-	// Filter out empty strings
-	var result []string
-	for _, file := range files {
-		if file != "" {
-			result = append(result, file)
+		if err := pullCmd.Run(); err != nil {
+			log.Printf("Git pull failed: %v", err)
+			return fmt.Errorf("git pull failed: %w", err)
 		}
-	}
-
-	return result, nil
+		return nil
+	})
 }
 
 func init() {

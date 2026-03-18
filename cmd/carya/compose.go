@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 
-	"carya/internal/repository"
 	"carya/internal/tui/model"
 
 	"github.com/spf13/cobra"
@@ -19,16 +18,7 @@ var composeCmd = &cobra.Command{
 		dbPath, _ := cmd.Flags().GetString("db")
 
 		// Set up repository for default db path and logging
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error initializing repository: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
 		log.Println("===== Compose command started =====")
 
@@ -47,7 +37,7 @@ var composeCmd = &cobra.Command{
 		}
 
 		// Run the commit composer
-		if err := model.RunCommitComposer(dbPath); err != nil {
+		if err := model.RunCommitComposer(dbPath, repo.RootPath()); err != nil {
 			log.Printf("Error running commit composer: %v", err)
 			fmt.Fprintf(os.Stderr, "Error running commit composer: %v\n", err)
 			os.Exit(1)

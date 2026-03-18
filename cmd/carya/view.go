@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"carya/internal/repository"
 	"carya/internal/tui/model"
 
 	"github.com/spf13/cobra"
@@ -19,17 +18,7 @@ var viewCmd = &cobra.Command{
 
 		// If no db path specified, use the default repository path
 		if dbPath == "" {
-			repo, err := repository.New()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error initializing repository: %v\n", err)
-				os.Exit(1)
-			}
-
-			if !repo.Exists() {
-				fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-				os.Exit(1)
-			}
-
+			repo := mustInitializedRepo()
 			dbPath = repo.DBPath()
 		}
 

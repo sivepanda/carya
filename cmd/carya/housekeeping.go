@@ -7,7 +7,7 @@ import (
 	"github.com/sivepanda/mycelia"
 	"carya/internal/tui/model"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 )
 

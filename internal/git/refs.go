@@ -8,8 +8,6 @@ import (
 	"strings"
 )
 
-const defaultTeamRemote = "origin"
-
 // RefManager handles git ref operations for Carya user state sharing.
 type RefManager struct {
 	repoPath string // Path to the main git repository
@@ -31,7 +29,7 @@ func NewRefManager(repoPath string) *RefManager {
 // UpdateUserTreeRef updates or creates the ref for a user's working tree.
 // Ref path: refs/carya/users/<userID>/tree
 func (r *RefManager) UpdateUserTreeRef(userID, treeHash string) error {
-	refPath := fmt.Sprintf("refs/carya/users/%s/tree", userID)
+	refPath := UserTreeRefPath(userID)
 
 	cmd := exec.Command("git", "update-ref", refPath, treeHash)
 	cmd.Dir = r.repoPath
@@ -57,13 +55,11 @@ func (r *RefManager) getTreeHashForRef(refPath string) (string, error) {
 }
 
 func (r *RefManager) getLocalUserTreeRef(userID string) (string, error) {
-	refPath := fmt.Sprintf("refs/carya/users/%s/tree", userID)
-	return r.getTreeHashForRef(refPath)
+	return r.getTreeHashForRef(UserTreeRefPath(userID))
 }
 
 func (r *RefManager) getRemoteUserTreeRef(remote, userID string) (string, error) {
-	refPath := fmt.Sprintf("refs/remotes/%s/carya/users/%s/tree", remote, userID)
-	return r.getTreeHashForRef(refPath)
+	return r.getTreeHashForRef(RemoteUserTreeRefPath(remote, userID))
 }
 
 // GetUserTreeRef retrieves the tree hash for a user's ref.
@@ -82,7 +78,7 @@ func (r *RefManager) GetUserTreeRef(userID string) (string, error) {
 
 // DeleteUserTreeRef removes a user's tree ref.
 func (r *RefManager) DeleteUserTreeRef(userID string) error {
-	refPath := fmt.Sprintf("refs/carya/users/%s/tree", userID)
+	refPath := UserTreeRefPath(userID)
 
 	cmd := exec.Command("git", "update-ref", "-d", refPath)
 	cmd.Dir = r.repoPath
@@ -103,8 +99,8 @@ func (r *RefManager) ListUserRefs() ([]UserRef, error) {
 	}
 
 	sources := []refSource{
-		{prefix: "refs/remotes/" + defaultTeamRemote + "/carya/users/", local: false},
-		{prefix: "refs/carya/users/", local: true},
+		{prefix: RemoteUserRefsPrefix(defaultTeamRemote), local: false},
+		{prefix: LocalUserRefsPrefix(), local: true},
 	}
 
 	byUser := make(map[string]UserRef)
@@ -244,7 +240,7 @@ func (r *RefManager) PushUserRef(remote, userID string) error {
 
 	// Push the commit to the user's ref on the remote
 	cmd := exec.Command("git", "push", remote,
-		fmt.Sprintf("%s:refs/carya/users/%s/tree", commitSHA, userID),
+		fmt.Sprintf("%s:%s", commitSHA, UserTreeRefPath(userID)),
 		"--force",
 	)
 	cmd.Dir = r.repoPath

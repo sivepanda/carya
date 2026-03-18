@@ -29,7 +29,6 @@ func (ef *EngineFeature) Description() string {
 func (ef *EngineFeature) Initialize(repo *repository.Repository) error {
 	eng, err := engine.NewEngineWithShadow(
 		repo.DBPath(),
-		repo.ShadowPath(),
 		repo.RootPath(),
 		repo.CaryaPath(),
 	)

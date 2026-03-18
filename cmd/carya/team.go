@@ -6,7 +6,6 @@ import (
 
 	"carya/internal/git"
 	"carya/internal/identity"
-	"carya/internal/repository"
 
 	"github.com/spf13/cobra"
 )
@@ -20,16 +19,7 @@ var teamCmd = &cobra.Command{
 
 Use --fetch to first fetch the latest refs from origin.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
 		refManager := git.NewRefManager(repo.RootPath())
 
@@ -84,16 +74,7 @@ This uses git merge-tree to simulate a merge without actually modifying any file
 	Run: func(cmd *cobra.Command, args []string) {
 		targetUser := args[0]
 
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
 		// Get current user's tree
 		userIdentity := identity.NewUserIdentity(repo.CaryaPath())
@@ -170,16 +151,7 @@ var teamDiffCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		targetUser := args[0]
 
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
 		// Get current user's tree
 		userIdentity := identity.NewUserIdentity(repo.CaryaPath())

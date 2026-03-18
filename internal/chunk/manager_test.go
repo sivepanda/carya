@@ -176,3 +176,42 @@ func TestManagerBackoffCapsAtMaximum(t *testing.T) {
 		t.Fatalf("expected interval to remain capped at %s, got %s", before, m.currentInterval)
 	}
 }
+
+func TestNewManagerAppliesAndNormalizesOptions(t *testing.T) {
+	strategy := &fakeStrategy{}
+	store := &fakeStore{}
+
+	m := NewManager(strategy, store, nil, ManagerOptions{
+		BaseInterval:  5 * time.Minute,
+		MaxInterval:   20 * time.Minute,
+		BackoffFactor: 2,
+	})
+	t.Cleanup(m.Stop)
+
+	if m.baseInterval != 5*time.Minute {
+		t.Fatalf("expected base interval 5m, got %s", m.baseInterval)
+	}
+	if m.maxInterval != 20*time.Minute {
+		t.Fatalf("expected max interval 20m, got %s", m.maxInterval)
+	}
+	if m.backoffFactor != 2 {
+		t.Fatalf("expected backoff factor 2, got %f", m.backoffFactor)
+	}
+
+	m2 := NewManager(strategy, store, nil, ManagerOptions{
+		BaseInterval:  0,
+		MaxInterval:   1 * time.Minute,
+		BackoffFactor: 1,
+	})
+	t.Cleanup(m2.Stop)
+
+	if m2.baseInterval != DefaultManagerOptions().BaseInterval {
+		t.Fatalf("expected default base interval, got %s", m2.baseInterval)
+	}
+	if m2.maxInterval != m2.baseInterval {
+		t.Fatalf("expected max interval to be clamped to base, got %s", m2.maxInterval)
+	}
+	if m2.backoffFactor != DefaultManagerOptions().BackoffFactor {
+		t.Fatalf("expected default backoff factor, got %f", m2.backoffFactor)
+	}
+}

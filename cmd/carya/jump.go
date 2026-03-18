@@ -13,14 +13,13 @@ import (
 
 	"carya/internal/chunk"
 	"carya/internal/git"
-	"carya/internal/repository"
 	"carya/internal/tui"
 	"carya/internal/tui/shared"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 )
 
@@ -54,16 +53,7 @@ Use --user if the username conflicts with a subcommand name.`,
 			return
 		}
 
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
 		refManager := git.NewRefManager(repo.RootPath())
 		treeHash, err := refManager.GetUserTreeRef(targetUser)
@@ -156,16 +146,7 @@ var jumpLeaveCmd = &cobra.Command{
 	Short: "Return from jumped state",
 	Long:  `Restore your working directory to HEAD and pop any auto-created jump stash.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
 		state, err := readJumpState(repo.CaryaPath())
 		if err != nil {
@@ -200,16 +181,7 @@ var jumpViewCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		targetUser := args[0]
 
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
 		refManager := git.NewRefManager(repo.RootPath())
 		treeHash, err := refManager.GetUserTreeRef(targetUser)
@@ -231,7 +203,7 @@ var jumpViewCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		p := tea.NewProgram(newJumpPreviewModel(targetUser, entries), tea.WithAltScreen())
+		p := tea.NewProgram(newJumpPreviewModel(targetUser, entries))
 		if _, err := p.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running preview: %v\n", err)
 			os.Exit(1)
@@ -266,7 +238,7 @@ func newJumpPreviewModel(targetUser string, entries []previewEntry) jumpPreviewM
 	search.Prompt = "search: "
 	search.Placeholder = "type file path..."
 	search.CharLimit = 200
-	search.Width = 36
+	search.SetWidth(36)
 
 	model := jumpPreviewModel{targetUser: targetUser, entries: entries, width: 80, height: 24, search: search}
 	model.rebuildFilter()
@@ -288,68 +260,89 @@ func (m jumpPreviewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			shared.UpdateViewportSizes(&m.list, &m.diff, layout)
 		}
+		m.resizeViewports()
 		m.refreshContent()
 		return m, nil
 	case tea.KeyMsg:
-		if m.searching {
-			switch msg.String() {
-			case "esc":
-				m.searching = false
-				m.search.Blur()
+		nav := shared.HandleSplitPaneNavigation(
+			msg,
+			&m.searching,
+			&m.search,
+			&m.cursor,
+			len(m.filtered),
+			&m.diff,
+			shared.IsUpKey(msg),
+			shared.IsDownKey(msg),
+			func() { m.rebuildFilter() },
+		)
+		if nav.Handled {
+			if nav.NeedsRefresh {
 				m.refreshContent()
-				return m, nil
-			case "enter":
-				m.searching = false
-				m.search.Blur()
-				m.refreshContent()
-				return m, nil
 			}
-
-			var cmd tea.Cmd
-			m.search, cmd = m.search.Update(msg)
-			m.rebuildFilter()
-			m.refreshContent()
-			return m, cmd
+			return m, nav.Cmd
 		}
 
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
-		case "/":
-			m.searching = true
-			m.search.Focus()
-			return m, textinput.Blink
-		case "up", "k":
-			if m.cursor > 0 && len(m.filtered) > 0 {
-				m.cursor--
-				m.refreshContent()
-			}
-		case "down", "j":
-			if m.cursor < len(m.filtered)-1 && len(m.filtered) > 0 {
-				m.cursor++
-				m.refreshContent()
-			}
-		case "ctrl+d":
-			m.diff.ViewDown()
-		case "ctrl+u":
-			m.diff.ViewUp()
 		}
 	}
 
 	return m, nil
 }
 
-func (m jumpPreviewModel) View() string {
+func (m jumpPreviewModel) View() tea.View {
+	var s string
+
 	if !m.ready {
 		loadingText := tui.TextStyle.Render(" Loading preview...")
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, loadingText)
-	}
-	if len(m.entries) == 0 {
+		s = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, loadingText)
+	} else if len(m.entries) == 0 {
 		title := tui.TitleStyle.Render("JUMP PREVIEW")
 		emptyMsg := tui.SubtleTextStyle.Render("No differences")
 		help := tui.HelpDescStyle.Render("q quit")
 		content := lipgloss.JoinVertical(lipgloss.Center, title, "", emptyMsg, "", help)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+		s = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+	} else {
+		title := tui.TitleStyle.Render("JUMP PREVIEW (read-only)")
+		subtitle := tui.SubtleTextStyle.Render("Comparing your HEAD against " + m.targetUser + "'s published state")
+		legendMinus := lipgloss.NewStyle().Foreground(tui.ColorError).Bold(true).Render("- YOUR HEAD")
+		legendPlus := lipgloss.NewStyle().Foreground(tui.ColorSuccess).Bold(true).Render("+ " + strings.ToUpper(m.targetUser) + "")
+		legend := tui.SubtleTextStyle.Render("Legend: ") + legendMinus + tui.SubtleTextStyle.Render("  |  ") + legendPlus
+
+		searchLine := shared.RenderSearchBar(m.searching, m.search.View(), m.search.Value(), len(m.filtered), len(m.entries), m.width)
+		paneHeight := m.height - lipgloss.Height(title) - lipgloss.Height(subtitle) - lipgloss.Height(legend) - lipgloss.Height(searchLine) - lipgloss.Height(m.helpLine())
+		if paneHeight < 1 {
+			paneHeight = 1
+		}
+
+		left := shared.RenderTitledPanel("FILES", m.list.View(), m.listWidth, paneHeight, tui.ColorBorder)
+		right := shared.RenderTitledPanel("DIFF", m.diff.View(), m.diffWidth, paneHeight, tui.ColorTitle)
+
+		help := m.helpLine()
+
+		body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+		s = lipgloss.JoinVertical(lipgloss.Left, title, subtitle, legend, searchLine, body, help)
+	}
+
+	v := tea.NewView(s)
+	v.AltScreen = true
+	return v
+}
+
+func (m jumpPreviewModel) helpLine() string {
+	return tui.HelpKeyStyle.Render("j/k") + tui.HelpDescStyle.Render(" navigate") +
+		tui.HelpDescStyle.Render(" • ") +
+		tui.HelpKeyStyle.Render("/") + tui.HelpDescStyle.Render(" search") +
+		tui.HelpDescStyle.Render(" • ") +
+		tui.HelpKeyStyle.Render("ctrl+d/u") + tui.HelpDescStyle.Render(" scroll") +
+		tui.HelpDescStyle.Render(" • ") +
+		tui.HelpKeyStyle.Render("q") + tui.HelpDescStyle.Render(" quit")
+}
+
+func (m *jumpPreviewModel) resizeViewports() {
+	if !m.ready {
+		return
 	}
 
 	title := tui.TitleStyle.Render("JUMP PREVIEW (read-only)")
@@ -357,22 +350,19 @@ func (m jumpPreviewModel) View() string {
 	legendMinus := lipgloss.NewStyle().Foreground(tui.ColorError).Bold(true).Render("- YOUR HEAD")
 	legendPlus := lipgloss.NewStyle().Foreground(tui.ColorSuccess).Bold(true).Render("+ " + strings.ToUpper(m.targetUser) + "")
 	legend := tui.SubtleTextStyle.Render("Legend: ") + legendMinus + tui.SubtleTextStyle.Render("  |  ") + legendPlus
-
 	searchLine := shared.RenderSearchBar(m.searching, m.search.View(), m.search.Value(), len(m.filtered), len(m.entries), m.width)
 
-	left := shared.RenderTitledPanel("FILES", m.list.View(), m.listWidth, m.height-4, tui.ColorBorder)
-	right := shared.RenderTitledPanel("DIFF", m.diff.View(), m.diffWidth, m.height-4, tui.ColorTitle)
+	paneHeight := m.height - lipgloss.Height(title) - lipgloss.Height(subtitle) - lipgloss.Height(legend) - lipgloss.Height(searchLine) - lipgloss.Height(m.helpLine())
+	if paneHeight < 1 {
+		paneHeight = 1
+	}
 
-	help := tui.HelpKeyStyle.Render("j/k") + tui.HelpDescStyle.Render(" navigate") +
-		tui.HelpDescStyle.Render(" • ") +
-		tui.HelpKeyStyle.Render("/") + tui.HelpDescStyle.Render(" search") +
-		tui.HelpDescStyle.Render(" • ") +
-		tui.HelpKeyStyle.Render("ctrl+d/u") + tui.HelpDescStyle.Render(" scroll") +
-		tui.HelpDescStyle.Render(" • ") +
-		tui.HelpKeyStyle.Render("q") + tui.HelpDescStyle.Render(" quit")
-
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	return lipgloss.JoinVertical(lipgloss.Left, title, subtitle, legend, searchLine, body, help)
+	listWidth, listHeight := shared.TitledPanelViewportSize(m.listWidth, paneHeight, 0)
+	diffWidth, diffHeight := shared.TitledPanelViewportSize(m.diffWidth, paneHeight, 0)
+	m.list.SetWidth(listWidth)
+	m.list.SetHeight(listHeight)
+	m.diff.SetWidth(diffWidth)
+	m.diff.SetHeight(diffHeight)
 }
 
 func (m *jumpPreviewModel) refreshContent() {

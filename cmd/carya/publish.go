@@ -7,7 +7,6 @@ import (
 
 	"carya/internal/git"
 	"carya/internal/identity"
-	"carya/internal/repository"
 
 	"github.com/spf13/cobra"
 )
@@ -22,16 +21,7 @@ var publishCmd = &cobra.Command{
 This creates or updates refs/carya/users/<your-user-id>/tree with your current
 working state. Use --push to also push the ref to the remote repository.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
 		// Get user identity
 		userIdentity := identity.NewUserIdentity(repo.CaryaPath())
@@ -62,8 +52,9 @@ working state. Use --push to also push the ref to the remote repository.`,
 		log.Printf("Published working state as %s\n", userID)
 		fmt.Printf("  Tree hash: %s\n", treeHash[:12])
 		log.Printf("  Tree hash: %s\n", treeHash[:12])
-		fmt.Printf("  Ref: refs/carya/users/%s/tree\n", userID)
-		log.Printf("  Ref: refs/carya/users/%s/tree\n", userID)
+		refPath := git.UserTreeRefPath(userID)
+		fmt.Printf("  Ref: %s\n", refPath)
+		log.Printf("  Ref: %s\n", refPath)
 
 		// Push if requested
 		if pushFlag {

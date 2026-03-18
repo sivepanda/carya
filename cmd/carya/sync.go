@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"carya/internal/chunk"
-	"carya/internal/repository"
 	"carya/internal/store"
 
 	"github.com/spf13/cobra"
@@ -21,16 +20,7 @@ var syncCmd = &cobra.Command{
 	Short: "Reconcile stored chunks with git state",
 	Long:  `Prune chunks that are already committed or no longer match current diffs.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
 		res, err := runChunkSync(repo.RootPath(), repo.DBPath())
 		if err != nil {

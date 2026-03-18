@@ -2,6 +2,9 @@
 package identity
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +12,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"carya/internal/config"
+	"carya/internal/git"
 
 	"github.com/google/uuid"
 )
@@ -40,26 +46,16 @@ func (u *UserIdentity) GetOrCreate() (string, error) {
 		}
 	}
 
-	// Try to get a user ID from various sources
-	var userID string
-
-	// Try git config user.name
-	if name := u.getGitUserName(); name != "" {
-		userID = sanitizeUserID(name)
+	username := defaultUserIDSource()
+	if username == "" {
+		username = uuid.New().String()[:8]
 	}
 
-	// Try system username
-	if userID == "" {
-		if username := os.Getenv("USER"); username != "" {
-			userID = sanitizeUserID(username)
-		} else if username := os.Getenv("USERNAME"); username != "" {
-			userID = sanitizeUserID(username)
-		}
-	}
-
-	// Fall back to UUID
-	if userID == "" {
-		userID = uuid.New().String()[:8]
+	identityText := buildDisplayName(username, configuredOrDefaultDeviceID(username))
+	userID, err := u.generateUniqueHash(identityText)
+	if err != nil {
+		log.Printf("Failed to generate user ID hash: %v", err)
+		return "", fmt.Errorf("failed to generate user ID hash: %w", err)
 	}
 
 	// Save the ID
@@ -69,6 +65,15 @@ func (u *UserIdentity) GetOrCreate() (string, error) {
 	}
 
 	return userID, nil
+}
+
+// DefaultDeviceID returns a default device identifier in <user>@<device> form.
+func DefaultDeviceID() string {
+	username := defaultUserIDSource()
+	if username == "" {
+		username = uuid.New().String()[:8]
+	}
+	return configuredOrDefaultDeviceID(username)
 }
 
 // Get returns the current user ID, or an error if not set.
@@ -114,14 +119,104 @@ func (u *UserIdentity) Exists() bool {
 	return err == nil
 }
 
-// getGitUserName attempts to get the user's name from git config.
-func (u *UserIdentity) getGitUserName() string {
+func defaultUserIDSource() string {
+	if name := gitUserName(); name != "" {
+		return sanitizeUserID(name)
+	}
+
+	if username := os.Getenv("USER"); username != "" {
+		return sanitizeUserID(username)
+	}
+
+	if username := os.Getenv("USERNAME"); username != "" {
+		return sanitizeUserID(username)
+	}
+
+	return ""
+}
+
+func gitUserName() string {
 	cmd := exec.Command("git", "config", "user.name")
 	output, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(output))
+}
+
+func configuredOrDefaultDeviceID(userID string) string {
+	cfg, err := config.LoadGlobalConfig()
+	if err == nil {
+		if configured := strings.TrimSpace(cfg.DeviceID); configured != "" {
+			return configured
+		}
+	}
+
+	host, err := os.Hostname()
+	if err != nil {
+		host = "device"
+	}
+
+	host = sanitizeUserID(host)
+	if host == "" {
+		host = "device"
+	}
+
+	return fmt.Sprintf("%s@%s", userID, host)
+}
+
+func buildDisplayName(userID, deviceID string) string {
+	return fmt.Sprintf("%s (%s)", userID, deviceID)
+}
+
+func hashDisplayName(displayName string) string {
+	sum := sha256.Sum256([]byte(displayName))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+func (u *UserIdentity) generateUniqueHash(identityText string) (string, error) {
+	base := hashDisplayName(identityText)
+	if !u.userHashExists(base) {
+		return base, nil
+	}
+
+	for i := 0; i < 12; i++ {
+		salt, err := randomHex(4)
+		if err != nil {
+			return "", err
+		}
+		candidate := hashDisplayName(identityText + "#" + salt)
+		if !u.userHashExists(candidate) {
+			return candidate, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not create a collision-free user hash")
+}
+
+func (u *UserIdentity) userHashExists(userHash string) bool {
+	if userHash == "" {
+		return false
+	}
+
+	localRef := git.UserTreeRefPath(userHash)
+	remoteRef := git.RemoteUserTreeRefPath("origin", userHash)
+
+	return u.refExists(localRef) || u.refExists(remoteRef)
+}
+
+func (u *UserIdentity) refExists(ref string) bool {
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", ref)
+	cmd.Dir = filepath.Dir(filepath.Dir(u.idPath))
+	return cmd.Run() == nil
+}
+
+func randomHex(byteLen int) (string, error) {
+	b := make([]byte, byteLen)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // sanitizeUserID converts a string to a valid user ID.
@@ -160,9 +255,14 @@ func ValidateUserID(id string) error {
 		return fmt.Errorf("user ID cannot be empty")
 	}
 
-	if len(id) > 32 {
-		log.Printf("User ID too long (max 32 characters)")
-		return fmt.Errorf("user ID too long (max 32 characters)")
+	if len(id) > 64 {
+		log.Printf("User ID too long (max 64 characters)")
+		return fmt.Errorf("user ID too long (max 64 characters)")
+	}
+
+	hashed := regexp.MustCompile(`^[a-f0-9]{16}$`)
+	if hashed.MatchString(id) {
+		return nil
 	}
 
 	// Must match: lowercase alphanumeric with hyphens and underscores

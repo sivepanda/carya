@@ -33,20 +33,57 @@ type Manager struct {
 	backoffFactor   float64
 }
 
-func NewManager(strategy ChunkStrategy, store ChunkStore, emitter EventEmitter) *Manager {
-	base := 2 * time.Minute
+type ManagerOptions struct {
+	BaseInterval  time.Duration
+	MaxInterval   time.Duration
+	BackoffFactor float64
+}
+
+func DefaultManagerOptions() ManagerOptions {
+	return ManagerOptions{
+		BaseInterval:  2 * time.Minute,
+		MaxInterval:   30 * time.Minute,
+		BackoffFactor: 1.5,
+	}
+}
+
+func NewManager(strategy ChunkStrategy, store ChunkStore, emitter EventEmitter, options ...ManagerOptions) *Manager {
+	opts := DefaultManagerOptions()
+	if len(options) > 0 {
+		opts = normalizeManagerOptions(options[0])
+	}
+
 	return &Manager{
 		strategy:        strategy,
 		store:           store,
 		emitter:         emitter,
-		ticker:          time.NewTicker(base),
+		ticker:          time.NewTicker(opts.BaseInterval),
 		stopCh:          make(chan struct{}),
 		lastActivity:    time.Now(),
-		baseInterval:    base,
-		currentInterval: base,
-		maxInterval:     30 * time.Minute,
-		backoffFactor:   1.5,
+		baseInterval:    opts.BaseInterval,
+		currentInterval: opts.BaseInterval,
+		maxInterval:     opts.MaxInterval,
+		backoffFactor:   opts.BackoffFactor,
 	}
+}
+
+func normalizeManagerOptions(opts ManagerOptions) ManagerOptions {
+	defaults := DefaultManagerOptions()
+
+	if opts.BaseInterval <= 0 {
+		opts.BaseInterval = defaults.BaseInterval
+	}
+	if opts.MaxInterval <= 0 {
+		opts.MaxInterval = defaults.MaxInterval
+	}
+	if opts.MaxInterval < opts.BaseInterval {
+		opts.MaxInterval = opts.BaseInterval
+	}
+	if opts.BackoffFactor <= 1.0 {
+		opts.BackoffFactor = defaults.BackoffFactor
+	}
+
+	return opts
 }
 
 func (m *Manager) Start() {

@@ -5,8 +5,6 @@ import (
 	"os"
 	"os/exec"
 
-	"carya/internal/repository"
-
 	"github.com/spf13/cobra"
 )
 
@@ -15,16 +13,7 @@ var pushCmd = &cobra.Command{
 	Short: "Push to git and sync chunks",
 	Long:  `Run git push, then reconcile Carya chunks against the updated git state.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
 		gitArgs := append([]string{"push"}, args...)
 		gitPush := exec.Command("git", gitArgs...)

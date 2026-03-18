@@ -15,7 +15,6 @@ import (
 	"carya/internal/features/engine"
 	"carya/internal/features/watcher"
 	"carya/internal/git"
-	"carya/internal/repository"
 
 	"github.com/spf13/cobra"
 )
@@ -31,14 +30,7 @@ var daemonCmd = &cobra.Command{
 	Short:  "Run Carya watcher as a background daemon",
 	Hidden: true,
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			log.Fatalf("Failed to initialize repository: %v", err)
-		}
-
-		if !repo.Exists() {
-			log.Fatalf("Not a Carya repository. Run 'carya init' first.")
-		}
+		repo := mustInitializedRepo()
 
 		d := daemon.New(repo.PIDPath(), repo.LogPath())
 		if err := d.WritePID(); err != nil {
@@ -174,16 +166,7 @@ var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start Carya watcher in the background",
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
 		d := daemon.New(repo.PIDPath(), repo.LogPath())
 
@@ -206,11 +189,7 @@ var stopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the Carya watcher daemon",
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		repo := mustRepo()
 
 		d := daemon.New(repo.PIDPath(), repo.LogPath())
 
@@ -232,11 +211,7 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Check if Carya watcher is running",
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		repo := mustRepo()
 
 		d := daemon.New(repo.PIDPath(), repo.LogPath())
 
@@ -266,11 +241,7 @@ var flushCmd = &cobra.Command{
 	Use:   "flush",
 	Short: "Flush all pending chunks to storage",
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		repo := mustRepo()
 
 		d := daemon.New(repo.PIDPath(), repo.LogPath())
 
