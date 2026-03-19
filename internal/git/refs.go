@@ -10,7 +10,7 @@ import (
 
 // RefManager handles git ref operations for Carya user state sharing.
 type RefManager struct {
-	repoPath string // Path to the main git repository
+	repoPath string
 }
 
 // UserRef represents a user's tree reference.

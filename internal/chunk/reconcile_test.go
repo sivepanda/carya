@@ -73,6 +73,32 @@ func TestDecideRetention(t *testing.T) {
 		}
 	})
 
+	t.Run("already in upstream patch prunes", func(t *testing.T) {
+		repo := makeRepoWithFile(t)
+
+		remoteRoot := t.TempDir()
+		remoteRepo := filepath.Join(remoteRoot, "remote.git")
+		gitRun(t, repo, "init", "--bare", remoteRepo)
+		gitRun(t, repo, "remote", "add", "origin", remoteRepo)
+		gitRun(t, repo, "push", "-u", "origin", "HEAD")
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("line1\nline2\n"), 0644); err != nil {
+			t.Fatalf("update file: %v", err)
+		}
+		patch := gitRun(t, repo, "diff", "--", "file.txt")
+		gitRun(t, repo, "add", "file.txt")
+		gitRun(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "apply patch")
+		gitRun(t, repo, "push", "origin", "HEAD")
+
+		gitRun(t, repo, "reset", "--hard", "HEAD~1")
+		gitRun(t, repo, "fetch", "origin")
+
+		decision, reason := DecideRetention(repo, Chunk{FilePath: "file.txt", Diff: patch})
+		if decision != DecisionPrune || reason != "already in upstream" {
+			t.Fatalf("expected prune already in upstream, got %s (%s)", decision, reason)
+		}
+	})
+
 	t.Run("mismatched patch prunes", func(t *testing.T) {
 		repo := makeRepoWithFile(t)
 		patch := "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-nope\n+still-nope\n"

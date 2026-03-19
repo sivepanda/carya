@@ -1,6 +1,7 @@
 package chunk
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -35,6 +36,10 @@ func DecideRetention(repoPath string, c Chunk) (ReconcileDecision, string) {
 		return DecisionPrune, "already applied/committed"
 	}
 
+	if appliesReverseUpstream(repoPath, c.Diff) {
+		return DecisionPrune, "already in upstream"
+	}
+
 	if appliesForward(repoPath, c.Diff) {
 		return DecisionKeep, "still applicable"
 	}
@@ -54,6 +59,49 @@ func appliesReverse(repoPath, patch string) bool {
 	cmd.Dir = repoPath
 	cmd.Stdin = strings.NewReader(patch)
 	return cmd.Run() == nil
+}
+
+func appliesReverseUpstream(repoPath, patch string) bool {
+	upstreamRef := currentUpstreamRef(repoPath)
+	if upstreamRef == "" {
+		return false
+	}
+
+	return appliesReverseToRef(repoPath, patch, upstreamRef)
+}
+
+func currentUpstreamRef(repoPath string) string {
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(string(out))
+}
+
+func appliesReverseToRef(repoPath, patch, ref string) bool {
+	indexFile, err := os.CreateTemp("", "carya-upstream-index-*")
+	if err != nil {
+		return false
+	}
+	indexPath := indexFile.Name()
+	_ = indexFile.Close()
+	defer os.Remove(indexPath)
+
+	readTreeCmd := exec.Command("git", "read-tree", ref)
+	readTreeCmd.Dir = repoPath
+	readTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
+	if err := readTreeCmd.Run(); err != nil {
+		return false
+	}
+
+	applyCmd := exec.Command("git", "apply", "--check", "--cached", "--reverse", "-")
+	applyCmd.Dir = repoPath
+	applyCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
+	applyCmd.Stdin = strings.NewReader(patch)
+	return applyCmd.Run() == nil
 }
 
 func isPathModified(repoPath, path string) (bool, error) {

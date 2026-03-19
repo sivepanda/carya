@@ -36,6 +36,12 @@ var composeCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		if syncRes, ran, err := maybeAutoChunkSync(repo.RootPath(), repo.CaryaPath(), dbPath); err != nil {
+			log.Printf("Automatic chunk sync before compose failed: %v", err)
+		} else if ran {
+			log.Printf("Automatic chunk sync before compose complete: kept %d, pruned %d", syncRes.kept, syncRes.pruned)
+		}
+
 		// Run the commit composer
 		if err := model.RunCommitComposer(dbPath, repo.RootPath()); err != nil {
 			log.Printf("Error running commit composer: %v", err)
