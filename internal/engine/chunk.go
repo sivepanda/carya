@@ -35,25 +35,6 @@ func (e *SimpleEventEmitter) EmitChunkFlushed(chunks []chunk.Chunk) {
 	log.Printf("Flushed %d chunks", len(chunks))
 }
 
-// NewEngine creates a new Carya engine with SQLite storage at the specified path.
-// It initializes the chunk manager with a git-backed strategy and simple event emitter.
-func NewEngine(storePath string) (*Engine, error) {
-	chunkStore, err := store.NewSQLiteStore(storePath)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create strategy without shadow repo for backwards compatibility
-	strategy := chunk.NewGitStrategy(nil)
-	emitter := &SimpleEventEmitter{}
-	manager := chunk.NewManager(strategy, chunkStore, emitter, managerOptionsFromGlobalConfig())
-
-	return &Engine{
-		chunkManager: manager,
-		store:        chunkStore,
-	}, nil
-}
-
 // NewEngineWithShadow creates a new Carya engine with shadow repository support.
 func NewEngineWithShadow(storePath, repoRoot, caryaPath string) (*Engine, error) {
 	chunkStore, err := store.NewSQLiteStore(storePath)
