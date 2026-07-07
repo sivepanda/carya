@@ -118,7 +118,7 @@ func (s *Server) send(msg interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(body))
+	header := fmt.Sprintf("Content-Length: %d\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n", len(body))
 	frame := make([]byte, 0, len(header)+len(body))
 	frame = append(frame, header...)
 	frame = append(frame, body...)
@@ -330,7 +330,7 @@ func (s *Server) publishDiagnostics(uri string) {
 	relPath := s.relativePathFromURI(uri)
 	report := s.analyzer.ReportForFile(relPath)
 
-	var diagnostics []Diagnostic
+	diagnostics := []Diagnostic{}
 	if report != nil {
 		for _, td := range report.Teammates {
 			severity := SeverityWarning
