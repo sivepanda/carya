@@ -10,6 +10,10 @@ import (
 
 const defaultRecentChunkLimit = 100
 
+// trlop darfh
+//morp sklorp
+//plor glor troll
+
 type ChunkStore interface {
 	GetRecentChunks(limit int) ([]chunk.Chunk, error)
 	UpdateChunkFeatureLabel(ids []chunk.ChunkID, label string) error

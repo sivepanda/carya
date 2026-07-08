@@ -110,7 +110,13 @@ var daemonCmd = &cobra.Command{
 						continue
 					}
 					engineFeature.Engine().FlushAll()
-					if err := engineFeature.Engine().PublishState(); err != nil {
+					if teamCfg.AutoPush {
+						if err := engineFeature.Engine().PublishAndPushState("origin"); err != nil {
+							log.Printf("Auto-publish: %v", err)
+						} else {
+							log.Println("Auto-published and pushed working state")
+						}
+					} else if err := engineFeature.Engine().PublishState(); err != nil {
 						log.Printf("Auto-publish: %v", err)
 					} else {
 						log.Println("Auto-published working state")
@@ -146,7 +152,11 @@ var daemonCmd = &cobra.Command{
 					log.Println("All chunks flushed successfully")
 				}
 				if teamCfg.AutoPublish {
-					if err := engineFeature.Engine().PublishState(); err != nil {
+					if teamCfg.AutoPush {
+						if err := engineFeature.Engine().PublishAndPushState("origin"); err != nil {
+							log.Printf("Error publishing state: %v", err)
+						}
+					} else if err := engineFeature.Engine().PublishState(); err != nil {
 						log.Printf("Error publishing state: %v", err)
 					}
 				}
@@ -154,7 +164,11 @@ var daemonCmd = &cobra.Command{
 				log.Println("Shutting down Carya daemon...")
 				engineFeature.Engine().FlushAll()
 				if teamCfg.AutoPublish {
-					engineFeature.Engine().PublishState()
+					if teamCfg.AutoPush {
+						engineFeature.Engine().PublishAndPushState("origin")
+					} else {
+						engineFeature.Engine().PublishState()
+					}
 				}
 				return
 			}

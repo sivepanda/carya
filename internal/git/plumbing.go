@@ -48,45 +48,65 @@ func (s *ShadowRepo) Initialize() error {
 		}
 	}
 
-	return s.ensureAlternates()
+	return s.removeStaleAlternates()
 }
 
-// ensureAlternates points the shadow repo's object store at the main repo's,
-// so the shadow repo can resolve blobs it doesn't have locally (needed for
-// merge-tree, diff-tree, and index seeding). This is one-directional: the
-// main repo never needs to read shadow objects since carya always accesses
-// the shadow repo explicitly via GIT_DIR, and wiring it the other way risks
-// gc/prune in one repo pruning objects only the other repo still needs.
-func (s *ShadowRepo) ensureAlternates() error {
-	mainObjects := filepath.Join(s.workTree, ".git", "objects")
-	shadowObjects := filepath.Join(s.gitDir, "objects")
-
-	if err := appendAlternate(filepath.Join(shadowObjects, "info", "alternates"), mainObjects); err != nil {
-		log.Printf("Failed to set shadow alternates: %v", err)
-		return fmt.Errorf("failed to set shadow alternates: %w", err)
-	}
-	return nil
+// gitEnv returns the environment for shadow repo git commands. GIT_DIR keeps
+// the shadow index isolated from the main repo, while GIT_OBJECT_DIRECTORY
+// routes all object reads and writes to the main repo's object store. Objects
+// must live in the main store because the refs that keep them alive
+// (refs/carya/*) are main-repo refs: an object stored only in the shadow repo
+// is invisible to the main repo's update-ref/push and unprotected from gc.
+func (s *ShadowRepo) gitEnv() []string {
+	return append(os.Environ(),
+		"GIT_DIR="+s.gitDir,
+		"GIT_OBJECT_DIRECTORY="+s.mainObjectsDir(),
+	)
 }
 
-func appendAlternate(altFile, targetPath string) error {
-	if err := os.MkdirAll(filepath.Dir(altFile), 0755); err != nil {
-		return err
+func (s *ShadowRepo) mainObjectsDir() string {
+	return filepath.Join(s.workTree, ".git", "objects")
+}
+
+// removeStaleAlternates cleans up the bidirectional alternates links that
+// older versions wired between the main and shadow object stores. The
+// main->shadow link let the main repo's gc prune objects the shadow repo
+// still referenced (and vice versa), corrupting whichever store lost the
+// race. Neither link is needed now that shadow commands write objects
+// directly into the main store.
+func (s *ShadowRepo) removeStaleAlternates() error {
+	shadowAlt := filepath.Join(s.gitDir, "objects", "info", "alternates")
+	if err := os.Remove(shadowAlt); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove shadow alternates: %w", err)
 	}
 
-	existing, _ := os.ReadFile(altFile)
-	for _, line := range strings.Split(string(existing), "\n") {
-		if strings.TrimSpace(line) == targetPath {
+	mainAlt := filepath.Join(s.mainObjectsDir(), "info", "alternates")
+	data, err := os.ReadFile(mainAlt)
+	if err != nil {
+		if os.IsNotExist(err) {
 			return nil
+		}
+		return fmt.Errorf("failed to read main alternates: %w", err)
+	}
+
+	shadowObjects := filepath.Join(s.gitDir, "objects")
+	var kept []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" && trimmed != shadowObjects {
+			kept = append(kept, trimmed)
 		}
 	}
 
-	f, err := os.OpenFile(altFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
+	if len(kept) == 0 {
+		if err := os.Remove(mainAlt); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove main alternates: %w", err)
+		}
+		return nil
 	}
-	defer f.Close()
-	_, err = fmt.Fprintln(f, targetPath)
-	return err
+	if err := os.WriteFile(mainAlt, []byte(strings.Join(kept, "\n")+"\n"), 0644); err != nil {
+		return fmt.Errorf("failed to rewrite main alternates: %w", err)
+	}
+	return nil
 }
 
 func (s *ShadowRepo) SeedIndexFromMainHEAD() error {
@@ -110,7 +130,7 @@ func (s *ShadowRepo) GetIndexEntry(path string) (string, error) {
 	defer s.mu.Unlock()
 
 	cmd := exec.Command("git", "ls-files", "--cached", "-s", "--", path)
-	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	cmd.Env = s.gitEnv()
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -141,7 +161,7 @@ func (s *ShadowRepo) HashObject(content []byte) (string, error) {
 	defer s.mu.Unlock()
 
 	cmd := exec.Command("git", "hash-object", "-w", "--stdin")
-	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	cmd.Env = s.gitEnv()
 	cmd.Stdin = bytes.NewReader(content)
 
 	output, err := cmd.Output()
@@ -159,7 +179,7 @@ func (s *ShadowRepo) GetObjectContent(hash string) ([]byte, error) {
 	defer s.mu.Unlock()
 
 	cmd := exec.Command("git", "cat-file", "-p", hash)
-	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	cmd.Env = s.gitEnv()
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -176,7 +196,7 @@ func (s *ShadowRepo) UpdateIndex(path, blobHash, mode string) error {
 	defer s.mu.Unlock()
 
 	cmd := exec.Command("git", "update-index", "--add", "--cacheinfo", fmt.Sprintf("%s,%s,%s", mode, blobHash, path))
-	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	cmd.Env = s.gitEnv()
 
 	if output, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("Failed to update index: %v, output: %s", err, output)
@@ -192,7 +212,7 @@ func (s *ShadowRepo) RemoveFromIndex(path string) error {
 	defer s.mu.Unlock()
 
 	cmd := exec.Command("git", "update-index", "--remove", path)
-	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	cmd.Env = s.gitEnv()
 
 	// Ignore errors if file wasn't in index
 	cmd.Run()
@@ -205,7 +225,7 @@ func (s *ShadowRepo) WriteTree() (string, error) {
 	defer s.mu.Unlock()
 
 	cmd := exec.Command("git", "write-tree")
-	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	cmd.Env = s.gitEnv()
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -230,7 +250,7 @@ func (s *ShadowRepo) DiffBlobs(oldHash, newHash, path string) (string, error) {
 	}
 
 	cmd := exec.Command("git", "diff", "--no-color", oldHash, newHash, "--", path)
-	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	cmd.Env = s.gitEnv()
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -256,7 +276,7 @@ func (s *ShadowRepo) DiffBlobsRaw(oldHash, newHash string) (string, error) {
 	}
 
 	cmd := exec.Command("git", "diff", "--no-color", oldHash, newHash)
-	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	cmd.Env = s.gitEnv()
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -317,7 +337,7 @@ func (s *ShadowRepo) ObjectExists(hash string) bool {
 	defer s.mu.Unlock()
 
 	cmd := exec.Command("git", "cat-file", "-e", hash)
-	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	cmd.Env = s.gitEnv()
 	return cmd.Run() == nil
 }
 
@@ -331,7 +351,7 @@ func (s *ShadowRepo) ReadTree(treeHash string) error {
 
 func (s *ShadowRepo) readTree(treeHash string) error {
 	cmd := exec.Command("git", "read-tree", treeHash)
-	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	cmd.Env = s.gitEnv()
 
 	if output, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("Failed to read tree: %v, output: %s", err, output)
@@ -354,7 +374,7 @@ func (s *ShadowRepo) CheckoutTree(treeHash string) error {
 	// Then checkout the index
 	cmd := exec.Command("git", "checkout-index", "-a", "-f")
 	cmd.Dir = s.workTree
-	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir, "GIT_WORK_TREE="+s.workTree)
+	cmd.Env = append(s.gitEnv(), "GIT_WORK_TREE="+s.workTree)
 
 	if output, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("Failed to checkout tree: %v, output: %s", err, output)
@@ -370,7 +390,7 @@ func (s *ShadowRepo) ListTree(treeHash string) ([]TreeEntry, error) {
 	defer s.mu.Unlock()
 
 	cmd := exec.Command("git", "ls-tree", "-r", treeHash)
-	cmd.Env = append(os.Environ(), "GIT_DIR="+s.gitDir)
+	cmd.Env = s.gitEnv()
 
 	output, err := cmd.Output()
 	if err != nil {

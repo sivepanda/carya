@@ -34,61 +34,103 @@ func createMainRepo(t *testing.T) string {
 	return repoRoot
 }
 
-func TestAppendAlternateIsIdempotent(t *testing.T) {
-	altFile := filepath.Join(t.TempDir(), "objects", "info", "alternates")
-	target := "/tmp/objects-path"
-
-	if err := appendAlternate(altFile, target); err != nil {
-		t.Fatalf("first appendAlternate failed: %v", err)
-	}
-	if err := appendAlternate(altFile, target); err != nil {
-		t.Fatalf("second appendAlternate failed: %v", err)
-	}
-
-	b, err := os.ReadFile(altFile)
-	if err != nil {
-		t.Fatalf("read alternates file: %v", err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	if len(lines) != 1 || lines[0] != target {
-		t.Fatalf("expected single alternate %q, got %q", target, lines)
-	}
-}
-
-func TestShadowRepoInitializeAndAlternates(t *testing.T) {
+func TestShadowRepoInitializeRemovesStaleAlternates(t *testing.T) {
 	repoRoot := createMainRepo(t)
 	caryaPath := filepath.Join(repoRoot, ".carya")
 	repo := NewShadowRepo(caryaPath, repoRoot)
+	if err := repo.Initialize(); err != nil {
+		t.Fatalf("first initialize: %v", err)
+	}
+
+	// Simulate the bidirectional alternates an older version left behind.
+	shadowObjects := filepath.Join(repo.GitDir(), "objects")
+	mainObjects := filepath.Join(repoRoot, ".git", "objects")
+	mainAlt := filepath.Join(mainObjects, "info", "alternates")
+	shadowAlt := filepath.Join(shadowObjects, "info", "alternates")
+	for altFile, target := range map[string]string{
+		mainAlt:   shadowObjects,
+		shadowAlt: mainObjects,
+	} {
+		if err := os.MkdirAll(filepath.Dir(altFile), 0755); err != nil {
+			t.Fatalf("mkdir for %s: %v", altFile, err)
+		}
+		if err := os.WriteFile(altFile, []byte(target+"\n"), 0644); err != nil {
+			t.Fatalf("write %s: %v", altFile, err)
+		}
+	}
 
 	if err := repo.Initialize(); err != nil {
-		t.Fatalf("initialize shadow repo: %v", err)
+		t.Fatalf("reinitialize shadow repo: %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(repo.GitDir(), "HEAD")); err != nil {
 		t.Fatalf("expected bare repo HEAD file: %v", err)
 	}
+	if _, err := os.Stat(mainAlt); !os.IsNotExist(err) {
+		t.Fatalf("expected main alternates to be removed, stat err: %v", err)
+	}
+	if _, err := os.Stat(shadowAlt); !os.IsNotExist(err) {
+		t.Fatalf("expected shadow alternates to be removed, stat err: %v", err)
+	}
+}
 
+func TestShadowRepoInitializePreservesForeignAlternates(t *testing.T) {
+	repoRoot := createMainRepo(t)
+	repo := NewShadowRepo(filepath.Join(repoRoot, ".carya"), repoRoot)
+
+	foreign := "/some/other/objects"
 	mainAlt := filepath.Join(repoRoot, ".git", "objects", "info", "alternates")
-	shadowAlt := filepath.Join(repo.GitDir(), "objects", "info", "alternates")
+	if err := os.MkdirAll(filepath.Dir(mainAlt), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	shadowObjects := filepath.Join(repo.GitDir(), "objects")
+	content := foreign + "\n" + shadowObjects + "\n"
+	if err := os.WriteFile(mainAlt, []byte(content), 0644); err != nil {
+		t.Fatalf("write main alternates: %v", err)
+	}
 
-	mainAltData, err := os.ReadFile(mainAlt)
+	if err := repo.Initialize(); err != nil {
+		t.Fatalf("initialize shadow repo: %v", err)
+	}
+
+	data, err := os.ReadFile(mainAlt)
 	if err != nil {
 		t.Fatalf("read main alternates: %v", err)
 	}
-	shadowAltData, err := os.ReadFile(shadowAlt)
-	if err != nil {
-		t.Fatalf("read shadow alternates: %v", err)
+	if got := strings.TrimSpace(string(data)); got != foreign {
+		t.Fatalf("expected only foreign alternate %q to remain, got %q", foreign, got)
+	}
+}
+
+func TestShadowRepoWritesObjectsToMainStore(t *testing.T) {
+	repoRoot := createMainRepo(t)
+	repo := NewShadowRepo(filepath.Join(repoRoot, ".carya"), repoRoot)
+	if err := repo.Initialize(); err != nil {
+		t.Fatalf("initialize shadow repo: %v", err)
 	}
 
-	shadowObjects := filepath.Join(repo.GitDir(), "objects")
-	mainObjects := filepath.Join(repoRoot, ".git", "objects")
-	if !strings.Contains(string(mainAltData), shadowObjects) {
-		t.Fatalf("main alternates does not contain shadow objects path: %q", shadowObjects)
+	blobHash, err := repo.HashObject([]byte("shared store\n"))
+	if err != nil {
+		t.Fatalf("hash object: %v", err)
 	}
-	if !strings.Contains(string(shadowAltData), mainObjects) {
-		t.Fatalf("shadow alternates does not contain main objects path: %q", mainObjects)
+	if err := repo.UpdateIndex("file.txt", blobHash, "100644"); err != nil {
+		t.Fatalf("update index: %v", err)
 	}
+	treeHash, err := repo.WriteTree()
+	if err != nil {
+		t.Fatalf("write tree: %v", err)
+	}
+
+	// Both objects must be readable by the main repo without any alternates,
+	// otherwise refs/carya/* refs cannot point at them and gc cannot protect them.
+	for _, hash := range []string{blobHash, treeHash} {
+		cmd := exec.Command("git", "cat-file", "-e", hash)
+		cmd.Dir = repoRoot
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("object %s not visible from main repo: %v", hash, err)
+		}
+	}
+	runGit(t, repoRoot, "update-ref", "refs/carya/users/test/tree", treeHash)
 }
 
 func TestShadowRepoObjectAndIndexFlow(t *testing.T) {

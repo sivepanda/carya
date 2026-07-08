@@ -91,7 +91,7 @@ func (i *Initializer) Initialize() error {
 	}
 
 	if i.isFeatureEnabled("teamsync") {
-		teamCfg := config.TeamConfig{AutoPublish: true, AutoFetch: true}
+		teamCfg := config.TeamConfig{AutoPublish: true, AutoFetch: true, AutoPush: true}
 		if err := config.SaveTeamConfig(i.repo.CaryaPath(), teamCfg); err != nil {
 			i.featureErrors["teamsync"] = err
 		}

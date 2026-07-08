@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var pushFlag bool
+var localOnlyFlag bool
 
 var publishCmd = &cobra.Command{
 	Use:   "publish",
@@ -19,7 +19,8 @@ var publishCmd = &cobra.Command{
 	Long: `Publish your current working tree state as a git ref that team members can see.
 
 This creates or updates refs/carya/users/<your-user-id>/tree with your current
-working state. Use --push to also push the ref to the remote repository.`,
+working state, and pushes it to the remote repository so team members can see
+it. Use --local-only to skip the push and only update the local ref.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		repo := mustInitializedRepo()
 
@@ -56,8 +57,8 @@ working state. Use --push to also push the ref to the remote repository.`,
 		fmt.Printf("  Ref: %s\n", refPath)
 		log.Printf("  Ref: %s\n", refPath)
 
-		// Push if requested
-		if pushFlag {
+		// Push unless explicitly disabled
+		if !localOnlyFlag {
 			fmt.Println("Pushing to origin...")
 			if err := refManager.PushUserRef("origin", userID); err != nil {
 				fmt.Fprintf(os.Stderr, "Error pushing ref: %v\n", err)
@@ -69,6 +70,6 @@ working state. Use --push to also push the ref to the remote repository.`,
 }
 
 func init() {
-	publishCmd.Flags().BoolVar(&pushFlag, "push", false, "Push the ref to origin")
+	publishCmd.Flags().BoolVar(&localOnlyFlag, "local-only", false, "Only update the local ref, don't push to origin")
 	rootCmd.AddCommand(publishCmd)
 }

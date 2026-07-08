@@ -127,6 +127,19 @@ func (e *Engine) PublishState() error {
 	return e.refManager.UpdateUserTreeRef(e.userID, treeHash)
 }
 
+// PublishAndPushState writes the current working tree to a git ref and pushes
+// it to remote, so team members can see it without the caller having to know
+// about the local ref update and the push as two separate steps.
+func (e *Engine) PublishAndPushState(remote string) error {
+	if err := e.PublishState(); err != nil {
+		return err
+	}
+	if e.refManager == nil {
+		return nil
+	}
+	return e.refManager.PushUserRef(remote, e.userID)
+}
+
 // GetShadow returns the shadow repository.
 func (e *Engine) GetShadow() *git.ShadowRepo {
 	return e.shadow

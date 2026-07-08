@@ -9,6 +9,7 @@ import (
 type TeamConfig struct {
 	AutoPublish bool `json:"auto_publish"`
 	AutoFetch   bool `json:"auto_fetch"`
+	AutoPush    bool `json:"auto_push"`
 }
 
 func LoadTeamConfig(caryaPath string) TeamConfig {
