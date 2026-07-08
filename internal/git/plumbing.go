@@ -51,8 +51,12 @@ func (s *ShadowRepo) Initialize() error {
 	return s.ensureAlternates()
 }
 
-// ensureAlternates bridges the shadow and main repo object stores so each can
-// resolve the other's objects (needed for merge-tree, diff-tree, and index seeding).
+// ensureAlternates points the shadow repo's object store at the main repo's,
+// so the shadow repo can resolve blobs it doesn't have locally (needed for
+// merge-tree, diff-tree, and index seeding). This is one-directional: the
+// main repo never needs to read shadow objects since carya always accesses
+// the shadow repo explicitly via GIT_DIR, and wiring it the other way risks
+// gc/prune in one repo pruning objects only the other repo still needs.
 func (s *ShadowRepo) ensureAlternates() error {
 	mainObjects := filepath.Join(s.workTree, ".git", "objects")
 	shadowObjects := filepath.Join(s.gitDir, "objects")
@@ -60,10 +64,6 @@ func (s *ShadowRepo) ensureAlternates() error {
 	if err := appendAlternate(filepath.Join(shadowObjects, "info", "alternates"), mainObjects); err != nil {
 		log.Printf("Failed to set shadow alternates: %v", err)
 		return fmt.Errorf("failed to set shadow alternates: %w", err)
-	}
-	if err := appendAlternate(filepath.Join(mainObjects, "info", "alternates"), shadowObjects); err != nil {
-		log.Printf("Failed to set main alternates: %v", err)
-		return fmt.Errorf("failed to set main alternates: %w", err)
 	}
 	return nil
 }
