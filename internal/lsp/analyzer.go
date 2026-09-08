@@ -140,16 +140,6 @@ func (a *Analyzer) ReportForFile(relativePath string) *FileReport {
 	return a.reports[relativePath]
 }
 
-func (a *Analyzer) AllReports() map[string]*FileReport {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	out := make(map[string]*FileReport, len(a.reports))
-	for k, v := range a.reports {
-		out[k] = v
-	}
-	return out
-}
-
 func (a *Analyzer) predictConflictedFiles(baseTree, myTree, theirTree string) map[string]bool {
 	if myTree == "" {
 		return nil

@@ -17,22 +17,6 @@ func NewWatcherFeature() *WatcherFeature {
 	return &WatcherFeature{}
 }
 
-// Name returns the feature name
-func (wf *WatcherFeature) Name() string {
-	return "watcher"
-}
-
-// Description returns a human-readable description
-func (wf *WatcherFeature) Description() string {
-	return "File system watcher for automatic change detection"
-}
-
-// Initialize sets up the file watcher with the given engine
-func (wf *WatcherFeature) Initialize(repo *repository.Repository) error {
-	wf.repo = repo
-	return nil
-}
-
 // InitializeWithEngine sets up the file watcher with a specific engine
 func (wf *WatcherFeature) InitializeWithEngine(repo *repository.Repository, eng *engine.Engine) error {
 	wf.repo = repo
@@ -59,9 +43,4 @@ func (wf *WatcherFeature) Stop() error {
 		wf.watcher.Stop()
 	}
 	return nil
-}
-
-// Watcher returns the underlying watcher instance
-func (wf *WatcherFeature) Watcher() *watcher.Watcher {
-	return wf.watcher
 }

@@ -32,7 +32,7 @@ func DecideRetention(repoPath string, c Chunk) (ReconcileDecision, string) {
 		return DecisionPrune, "binary path matches HEAD"
 	}
 
-	if appliesReverse(repoPath, c.Diff) {
+	if appliesReverseToRef(repoPath, c.Diff, "HEAD") {
 		return DecisionPrune, "already applied/committed"
 	}
 
@@ -48,17 +48,7 @@ func DecideRetention(repoPath string, c Chunk) (ReconcileDecision, string) {
 }
 
 func appliesForward(repoPath, patch string) bool {
-	cmd := exec.Command("git", "apply", "--check", "--cached", "-")
-	cmd.Dir = repoPath
-	cmd.Stdin = strings.NewReader(patch)
-	return cmd.Run() == nil
-}
-
-func appliesReverse(repoPath, patch string) bool {
-	cmd := exec.Command("git", "apply", "--check", "--cached", "--reverse", "-")
-	cmd.Dir = repoPath
-	cmd.Stdin = strings.NewReader(patch)
-	return cmd.Run() == nil
+	return appliesToRef(repoPath, patch, "HEAD", false)
 }
 
 func appliesReverseUpstream(repoPath, patch string) bool {
@@ -82,6 +72,10 @@ func currentUpstreamRef(repoPath string) string {
 }
 
 func appliesReverseToRef(repoPath, patch, ref string) bool {
+	return appliesToRef(repoPath, patch, ref, true)
+}
+
+func appliesToRef(repoPath, patch, ref string, reverse bool) bool {
 	indexFile, err := os.CreateTemp("", "carya-upstream-index-*")
 	if err != nil {
 		return false
@@ -97,7 +91,12 @@ func appliesReverseToRef(repoPath, patch, ref string) bool {
 		return false
 	}
 
-	applyCmd := exec.Command("git", "apply", "--check", "--cached", "--reverse", "-")
+	applyArgs := []string{"apply", "--check", "--cached"}
+	if reverse {
+		applyArgs = append(applyArgs, "--reverse")
+	}
+	applyArgs = append(applyArgs, "-")
+	applyCmd := exec.Command("git", applyArgs...)
 	applyCmd.Dir = repoPath
 	applyCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
 	applyCmd.Stdin = strings.NewReader(patch)

@@ -82,95 +82,89 @@ var daemonCmd = &cobra.Command{
 
 		var fetchInProgress int32
 
-		go func() {
-			statusTicker := time.NewTicker(10 * time.Second)
-			publishTicker := time.NewTicker(60 * time.Second)
-			fetchTicker := time.NewTicker(2 * time.Minute)
-			defer statusTicker.Stop()
-			defer publishTicker.Stop()
-			defer fetchTicker.Stop()
+		statusTicker := time.NewTicker(10 * time.Second)
+		publishTicker := time.NewTicker(60 * time.Second)
+		fetchTicker := time.NewTicker(2 * time.Minute)
+		defer statusTicker.Stop()
+		defer publishTicker.Stop()
+		defer fetchTicker.Stop()
 
-			for {
-				select {
-				case <-statusTicker.C:
-					interval, isIdle := engineFeature.Engine().FlushStatus()
-					status := DaemonStatus{
-						FlushInterval: interval.String(),
-						IsIdle:        isIdle,
-						LastUpdate:    time.Now().Format(time.RFC3339),
-					}
-					data, err := json.Marshal(status)
-					if err != nil {
-						continue
-					}
-					os.WriteFile(repo.StatusPath(), data, 0644)
+		for {
+			select {
+			case <-statusTicker.C:
+				interval, isIdle := engineFeature.Engine().FlushStatus()
+				status := DaemonStatus{
+					FlushInterval: interval.String(),
+					IsIdle:        isIdle,
+					LastUpdate:    time.Now().Format(time.RFC3339),
+				}
+				data, err := json.Marshal(status)
+				if err != nil {
+					continue
+				}
+				os.WriteFile(repo.StatusPath(), data, 0644)
 
-				case <-publishTicker.C:
-					if !teamCfg.AutoPublish {
-						continue
-					}
-					engineFeature.Engine().FlushAll()
-					if teamCfg.AutoPush {
-						if err := engineFeature.Engine().PublishAndPushState("origin"); err != nil {
-							log.Printf("Auto-publish: %v", err)
-						} else {
-							log.Println("Auto-published and pushed working state")
-						}
-					} else if err := engineFeature.Engine().PublishState(); err != nil {
+			case <-publishTicker.C:
+				if !teamCfg.AutoPublish {
+					continue
+				}
+				engineFeature.Engine().FlushAll()
+				if teamCfg.AutoPush {
+					if err := engineFeature.Engine().PublishAndPushState("origin"); err != nil {
 						log.Printf("Auto-publish: %v", err)
 					} else {
-						log.Println("Auto-published working state")
+						log.Println("Auto-published and pushed working state")
 					}
-
-				case <-fetchTicker.C:
-					if !teamCfg.AutoFetch {
-						continue
-					}
-					if !atomic.CompareAndSwapInt32(&fetchInProgress, 0, 1) {
-						continue
-					}
-					go func() {
-						defer atomic.StoreInt32(&fetchInProgress, 0)
-						if err := refManager.FetchCaryaRefs("origin"); err != nil {
-							log.Printf("Auto-fetch: %v", err)
-						}
-					}()
-
-				case <-sigCh:
-					return
-				}
-			}
-		}()
-
-		for sig := range sigCh {
-			switch sig {
-			case syscall.SIGUSR1:
-				log.Println("Received flush signal, flushing all chunks...")
-				if err := engineFeature.Engine().FlushAll(); err != nil {
-					log.Printf("Error flushing chunks: %v", err)
+				} else if err := engineFeature.Engine().PublishState(); err != nil {
+					log.Printf("Auto-publish: %v", err)
 				} else {
-					log.Println("All chunks flushed successfully")
+					log.Println("Auto-published working state")
 				}
-				if teamCfg.AutoPublish {
-					if teamCfg.AutoPush {
-						if err := engineFeature.Engine().PublishAndPushState("origin"); err != nil {
+
+			case <-fetchTicker.C:
+				if !teamCfg.AutoFetch {
+					continue
+				}
+				if !atomic.CompareAndSwapInt32(&fetchInProgress, 0, 1) {
+					continue
+				}
+				go func() {
+					defer atomic.StoreInt32(&fetchInProgress, 0)
+					if err := refManager.FetchCaryaRefs("origin"); err != nil {
+						log.Printf("Auto-fetch: %v", err)
+					}
+				}()
+
+			case sig := <-sigCh:
+				switch sig {
+				case syscall.SIGUSR1:
+					log.Println("Received flush signal, flushing all chunks...")
+					if err := engineFeature.Engine().FlushAll(); err != nil {
+						log.Printf("Error flushing chunks: %v", err)
+					} else {
+						log.Println("All chunks flushed successfully")
+					}
+					if teamCfg.AutoPublish {
+						if teamCfg.AutoPush {
+							if err := engineFeature.Engine().PublishAndPushState("origin"); err != nil {
+								log.Printf("Error publishing state: %v", err)
+							}
+						} else if err := engineFeature.Engine().PublishState(); err != nil {
 							log.Printf("Error publishing state: %v", err)
 						}
-					} else if err := engineFeature.Engine().PublishState(); err != nil {
-						log.Printf("Error publishing state: %v", err)
 					}
-				}
-			case os.Interrupt, syscall.SIGTERM:
-				log.Println("Shutting down Carya daemon...")
-				engineFeature.Engine().FlushAll()
-				if teamCfg.AutoPublish {
-					if teamCfg.AutoPush {
-						engineFeature.Engine().PublishAndPushState("origin")
-					} else {
-						engineFeature.Engine().PublishState()
+				case os.Interrupt, syscall.SIGTERM:
+					log.Println("Shutting down Carya daemon...")
+					engineFeature.Engine().FlushAll()
+					if teamCfg.AutoPublish {
+						if teamCfg.AutoPush {
+							engineFeature.Engine().PublishAndPushState("origin")
+						} else {
+							engineFeature.Engine().PublishState()
+						}
 					}
+					return
 				}
-				return
 			}
 		}
 	},

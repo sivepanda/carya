@@ -140,21 +140,6 @@ func (e *Engine) PublishAndPushState(remote string) error {
 	return e.refManager.PushUserRef(remote, e.userID)
 }
 
-// GetShadow returns the shadow repository.
-func (e *Engine) GetShadow() *git.ShadowRepo {
-	return e.shadow
-}
-
-// GetRefManager returns the ref manager.
-func (e *Engine) GetRefManager() *git.RefManager {
-	return e.refManager
-}
-
-// GetUserID returns the user identifier.
-func (e *Engine) GetUserID() string {
-	return e.userID
-}
-
 func managerOptionsFromGlobalConfig() chunk.ManagerOptions {
 	opts := chunk.DefaultManagerOptions()
 

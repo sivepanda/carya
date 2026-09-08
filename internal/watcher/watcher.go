@@ -103,7 +103,7 @@ func (w *Watcher) watchLoop() {
 // loadGitignoreRules loads ignore rules from .gitignore file and adds default rules.
 func (w *Watcher) loadGitignoreRules() {
 	// Default ignore rules
-	w.gitignoreRules = []string{".git/", "node_modules/", ".vscode/", ".idea/"}
+	w.gitignoreRules = []string{".git/", ".carya/", "node_modules/", ".vscode/", ".idea/"}
 
 	gitignorePath := filepath.Join(w.watchDir, ".gitignore")
 	file, err := os.Open(gitignorePath)
@@ -126,6 +126,9 @@ func (w *Watcher) shouldIgnore(path string, isDir bool) bool {
 	relPath, err := filepath.Rel(w.watchDir, path)
 	if err != nil {
 		return false
+	}
+	if relPath == ".carya" || strings.HasPrefix(relPath, ".carya"+string(filepath.Separator)) {
+		return true
 	}
 
 	for _, rule := range w.gitignoreRules {

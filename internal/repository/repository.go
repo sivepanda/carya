@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -23,9 +24,17 @@ func New() (*Repository, error) {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
 
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = wd
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("not inside a git repository (run 'git init' first): %w", err)
+	}
+	rootPath := strings.TrimSpace(string(output))
+
 	return &Repository{
-		rootPath:  wd,
-		caryaPath: filepath.Join(wd, ".carya"),
+		rootPath:  rootPath,
+		caryaPath: filepath.Join(rootPath, ".carya"),
 	}, nil
 }
 

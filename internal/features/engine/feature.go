@@ -15,16 +15,6 @@ func NewEngineFeature() *EngineFeature {
 	return &EngineFeature{}
 }
 
-// Name returns the feature name
-func (ef *EngineFeature) Name() string {
-	return "engine"
-}
-
-// Description returns a human-readable description
-func (ef *EngineFeature) Description() string {
-	return "Main engine for chunk management and storage"
-}
-
 // Initialize sets up the engine with shadow repository support
 func (ef *EngineFeature) Initialize(repo *repository.Repository) error {
 	eng, err := engine.NewEngineWithShadow(

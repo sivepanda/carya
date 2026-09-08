@@ -2,10 +2,40 @@ package repository
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestNewFindsGitRootFromSubdirectory(t *testing.T) {
+	root := t.TempDir()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = root
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, output)
+	}
+	subdir := filepath.Join(root, "nested", "directory")
+	if err := os.MkdirAll(subdir, 0755); err != nil {
+		t.Fatalf("create subdirectory: %v", err)
+	}
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	defer os.Chdir(oldWD)
+	if err := os.Chdir(subdir); err != nil {
+		t.Fatalf("change directory: %v", err)
+	}
+
+	repo, err := New()
+	if err != nil {
+		t.Fatalf("create repository: %v", err)
+	}
+	if repo.RootPath() != root {
+		t.Fatalf("expected root %q, got %q", root, repo.RootPath())
+	}
+}
 
 func TestRepositoryPathsAndEnsureExists(t *testing.T) {
 	root := t.TempDir()

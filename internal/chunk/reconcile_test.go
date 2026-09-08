@@ -73,6 +73,20 @@ func TestDecideRetention(t *testing.T) {
 		}
 	})
 
+	t.Run("staged patch remains tracked", func(t *testing.T) {
+		repo := makeRepoWithFile(t)
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("line1\nline2\n"), 0644); err != nil {
+			t.Fatalf("update file: %v", err)
+		}
+		patch := gitRun(t, repo, "diff", "--", "file.txt")
+		gitRun(t, repo, "add", "file.txt")
+
+		decision, reason := DecideRetention(repo, Chunk{FilePath: "file.txt", Diff: patch})
+		if decision != DecisionKeep || reason != "still applicable" {
+			t.Fatalf("expected staged patch to remain tracked, got %s (%s)", decision, reason)
+		}
+	})
+
 	t.Run("already in upstream patch prunes", func(t *testing.T) {
 		repo := makeRepoWithFile(t)
 

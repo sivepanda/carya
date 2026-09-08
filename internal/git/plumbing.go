@@ -65,6 +65,11 @@ func (s *ShadowRepo) gitEnv() []string {
 }
 
 func (s *ShadowRepo) mainObjectsDir() string {
+	cmd := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-path", "objects")
+	cmd.Dir = s.workTree
+	if output, err := cmd.Output(); err == nil {
+		return strings.TrimSpace(string(output))
+	}
 	return filepath.Join(s.workTree, ".git", "objects")
 }
 

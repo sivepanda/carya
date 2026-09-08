@@ -18,6 +18,13 @@ var initCmd = &cobra.Command{
 	Short: "initialize a new Carya repository.",
 	Long:  `initialize a new Carya repository in the current directory and starts watching for file changes.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		// Carya builds on an existing git repository; fail fast with a clear
+		// message instead of letting the TUI's feature setup silently no-op.
+		if _, err := repository.New(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
 		// Create and run the TUI model
 		initModel := model.NewInit()
 		p := tea.NewProgram(&initModel)

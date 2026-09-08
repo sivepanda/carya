@@ -54,6 +54,10 @@ Use --user if the username conflicts with a subcommand name.`,
 		}
 
 		repo := mustInitializedRepo()
+		if jumpInProgress(repo.CaryaPath()) {
+			fmt.Fprintln(os.Stderr, "Error: A jump is already active. Run 'carya jump leave' before jumping again.")
+			os.Exit(1)
+		}
 
 		refManager := git.NewRefManager(repo.RootPath())
 		treeHash, err := refManager.GetUserTreeRef(targetUser)
@@ -117,14 +121,33 @@ Use --user if the username conflicts with a subcommand name.`,
 			}
 			stashHash = hash
 		}
-
-		if err := checkoutTree(repo.RootPath(), treeHash); err != nil {
-			fmt.Fprintf(os.Stderr, "Error checking out tree: %v\n", err)
+		if err := writeJumpState(repo.CaryaPath(), jumpState{TargetUser: targetUser, StashHash: stashHash}); err != nil {
+			if stashHash != "" {
+				_ = restoreStash(repo.RootPath(), stashHash)
+			}
+			fmt.Fprintf(os.Stderr, "Error recording jump state: %v\n", err)
 			os.Exit(1)
 		}
 
-		if err := writeJumpState(repo.CaryaPath(), jumpState{TargetUser: targetUser, StashHash: stashHash}); err != nil {
-			fmt.Fprintf(os.Stderr, "Error recording jump state: %v\n", err)
+		if err := checkoutTree(repo.RootPath(), treeHash); err != nil {
+			fmt.Fprintf(os.Stderr, "Error checking out tree: %v\n", err)
+			// Roll back so a failed jump doesn't leave stale state blocking
+			// future jumps. If restoring HEAD itself fails, keep the state
+			// file so 'carya jump leave' can still recover.
+			if restoreErr := checkoutTree(repo.RootPath(), "HEAD"); restoreErr != nil {
+				fmt.Fprintf(os.Stderr, "Error restoring HEAD state: %v\n", restoreErr)
+				fmt.Fprintln(os.Stderr, "Run 'carya jump leave' to recover your previous state.")
+				os.Exit(1)
+			}
+			if stashHash != "" {
+				if err := restoreStash(repo.RootPath(), stashHash); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+					fmt.Fprintf(os.Stderr, "  Recover manually: git stash apply %s\n", shortHash(stashHash))
+				}
+			}
+			if err := clearJumpState(repo.CaryaPath()); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not clear jump state: %v\n", err)
+			}
 			os.Exit(1)
 		}
 
@@ -648,7 +671,33 @@ func writeJumpState(caryaPath string, state jumpState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(jumpStatePath(caryaPath), data, 0644)
+	tmp, err := os.CreateTemp(caryaPath, "jump-state-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, jumpStatePath(caryaPath))
+}
+
+func jumpInProgress(caryaPath string) bool {
+	_, err := os.Stat(jumpStatePath(caryaPath))
+	return err == nil
 }
 
 func readJumpState(caryaPath string) (jumpState, error) {

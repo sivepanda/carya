@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -27,6 +29,22 @@ func startProcess(cmd *exec.Cmd, logFile *os.File) error {
 	go cmd.Wait()
 
 	return nil
+}
+
+func processMatches(pid int, executable string) bool {
+	actual, err := os.Readlink(filepath.Join("/proc", fmt.Sprint(pid), "exe"))
+	if err != nil {
+		// No /proc on this platform (e.g. macOS): identity can't be
+		// verified, so fall back to the plain liveness check.
+		if _, statErr := os.Stat("/proc"); statErr != nil {
+			return true
+		}
+		return false
+	}
+	// The link gains a " (deleted)" suffix once the binary on disk is
+	// replaced, e.g. after a rebuild of a still-running daemon.
+	actual = strings.TrimSuffix(actual, " (deleted)")
+	return actual == executable
 }
 
 // isProcessRunning checks if a process is running on Unix systems

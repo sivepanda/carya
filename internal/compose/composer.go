@@ -222,7 +222,7 @@ func (c *Composer) CreateCommit(commitMsg string) (CommitResult, error) {
 		}, nil
 	}
 
-	if err := patch.CheckApply(result.Patch); err != nil {
+	if err := patch.CheckApply(c.repoPath, result.Patch); err != nil {
 		applicable, skipped := c.classifySelectedChunks()
 
 		applicableCount := 0
@@ -255,16 +255,7 @@ func (c *Composer) CreateCommit(commitMsg string) (CommitResult, error) {
 }
 
 func (c *Composer) ApplyPatchAndCommit(patchText, commitMsg string) (string, error) {
-	if err := patch.Apply(patchText); err != nil {
-		return "", err
-	}
-
-	output, err := patch.Commit(commitMsg)
-	if err != nil {
-		return "", err
-	}
-
-	return output, nil
+	return patch.ApplyAndCommit(c.repoPath, patchText, commitMsg)
 }
 
 func (c *Composer) ApplyApplicableCommit(applicable map[int]bool, commitMsg string) (string, error) {
@@ -273,7 +264,7 @@ func (c *Composer) ApplyApplicableCommit(applicable map[int]bool, commitMsg stri
 		return "", fmt.Errorf("no applicable patches to apply")
 	}
 
-	if err := patch.CheckApply(result.Patch); err != nil {
+	if err := patch.CheckApply(c.repoPath, result.Patch); err != nil {
 		return "", err
 	}
 
