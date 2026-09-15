@@ -440,7 +440,7 @@ func (m *CommitComposer) updateEditing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, m.keys.Quit):
+		case msg.String() == "ctrl+c":
 			return m, tea.Quit
 
 		case msg.String() == "esc":
@@ -865,7 +865,7 @@ func (m *CommitComposer) renderEditingView() string {
 	// Instructions
 	escHelp := tui.HelpKeyStyle.Render("esc") + tui.HelpDescStyle.Render(" back")
 	enterHelp := tui.HelpKeyStyle.Render("enter") + tui.HelpDescStyle.Render(" continue")
-	quitHelp := tui.HelpKeyStyle.Render("q") + tui.HelpDescStyle.Render(" quit")
+	quitHelp := tui.HelpKeyStyle.Render("ctrl+c") + tui.HelpDescStyle.Render(" quit")
 
 	footer := lipgloss.NewStyle().
 		Padding(1, 1).

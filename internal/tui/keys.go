@@ -54,7 +54,7 @@ func DefaultKeys() KeyMap {
 			key.WithHelp("enter", "continue"),
 		),
 		Select: key.NewBinding(
-			key.WithKeys("x", " "),
+			key.WithKeys("x", "space"),
 			key.WithHelp("x/space", "select"),
 		),
 		Help: key.NewBinding(

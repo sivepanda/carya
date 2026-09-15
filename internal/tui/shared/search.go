@@ -73,7 +73,7 @@ func RenderSearchBar(searching bool, searchView, query string, shown, total, wid
 	content := left + strings.Repeat(" ", space) + right
 
 	bar := barStyle.
-		Width(innerWidth).
+		Width(width).
 		Render(content)
 
 	return bar
