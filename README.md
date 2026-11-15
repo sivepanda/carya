@@ -1,4 +1,4 @@
-## DISCLAIMER: THIS PROJECT IS UNDER DEVELOPMENT AND IS CURRENTLY NOT FUNCTIONAL YET!
+## DISCLAIMER: THIS PROJECT IS UNDER DEVELOPMENT
 That also means you can easily hit me up if you have ideas and have them be integrated into the core platform. Leave an issue!  :)
 
 # Carya
