@@ -6,13 +6,15 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"carya/internal/config"
 	"carya/internal/daemon"
 	"carya/internal/features/engine"
 	"carya/internal/features/watcher"
-	"carya/internal/repository"
+	"carya/internal/git"
 
 	"github.com/spf13/cobra"
 )
@@ -28,34 +30,30 @@ var daemonCmd = &cobra.Command{
 	Short:  "Run Carya watcher as a background daemon",
 	Hidden: true,
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			log.Fatalf("Failed to initialize repository: %v", err)
-		}
+		repo := mustInitializedRepo()
 
-		if !repo.Exists() {
-			log.Fatalf("Not a Carya repository. Run 'carya init' first.")
-		}
-
-		d := daemon.New(
-			repo.PIDPath(),
-			repo.LogPath(),
-		)
-
+		d := daemon.New(repo.PIDPath(), repo.LogPath())
 		if err := d.WritePID(); err != nil {
 			log.Fatalf("Failed to write PID file: %v", err)
 		}
-
 		defer d.RemovePID()
 
-		logFile, err := os.OpenFile(repo.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			log.Fatalf("Failed to open log file: %v", err)
-		}
-		defer logFile.Close()
-		log.SetOutput(logFile)
-
 		log.Println("Starting Carya daemon...")
+
+		teamCfg := config.LoadTeamConfig(repo.CaryaPath())
+		refManager := git.NewRefManager(repo.RootPath())
+
+		if teamCfg.AutoFetch {
+			if err := refManager.FetchCaryaRefs("origin"); err != nil {
+				log.Printf("Note: Could not fetch team refs from origin: %v", err)
+			} else {
+				log.Println("Fetched team refs from origin")
+			}
+		}
+
+		if err := refManager.SetBaseRef(); err != nil {
+			log.Printf("Note: Could not set base ref: %v", err)
+		}
 
 		engineFeature := engine.NewEngineFeature()
 		if err := engineFeature.Initialize(repo); err != nil {
@@ -82,47 +80,91 @@ var daemonCmd = &cobra.Command{
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGUSR1)
 
-		go func() {
-			ticker := time.NewTicker(10 * time.Second)
-			defer ticker.Stop()
+		var fetchInProgress int32
 
-			for {
-				select {
-				case <-ticker.C:
-					interval, isIdle := engineFeature.Engine().FlushStatus()
-					status := DaemonStatus{
-						FlushInterval: interval.String(),
-						IsIdle:        isIdle,
-						LastUpdate:    time.Now().Format(time.RFC3339),
-					}
+		statusTicker := time.NewTicker(10 * time.Second)
+		publishTicker := time.NewTicker(60 * time.Second)
+		fetchTicker := time.NewTicker(2 * time.Minute)
+		defer statusTicker.Stop()
+		defer publishTicker.Stop()
+		defer fetchTicker.Stop()
 
-					data, err := json.Marshal(status)
-					if err != nil {
-						log.Printf("Error marshaling status: %v", err)
-						continue
-					}
+		for {
+			select {
+			case <-statusTicker.C:
+				interval, isIdle := engineFeature.Engine().FlushStatus()
+				status := DaemonStatus{
+					FlushInterval: interval.String(),
+					IsIdle:        isIdle,
+					LastUpdate:    time.Now().Format(time.RFC3339),
+				}
+				data, err := json.Marshal(status)
+				if err != nil {
+					continue
+				}
+				os.WriteFile(repo.StatusPath(), data, 0644)
 
-					if err := os.WriteFile(repo.StatusPath(), data, 0644); err != nil {
-						log.Printf("Error writing status file: %v", err)
+			case <-publishTicker.C:
+				if !teamCfg.AutoPublish {
+					continue
+				}
+				engineFeature.Engine().FlushAll()
+				if teamCfg.AutoPush {
+					if err := engineFeature.Engine().PublishAndPushState("origin"); err != nil {
+						log.Printf("Auto-publish: %v", err)
+					} else {
+						log.Println("Auto-published and pushed working state")
 					}
-				case <-sigCh:
+				} else if err := engineFeature.Engine().PublishState(); err != nil {
+					log.Printf("Auto-publish: %v", err)
+				} else {
+					log.Println("Auto-published working state")
+				}
+
+			case <-fetchTicker.C:
+				if !teamCfg.AutoFetch {
+					continue
+				}
+				if !atomic.CompareAndSwapInt32(&fetchInProgress, 0, 1) {
+					continue
+				}
+				go func() {
+					defer atomic.StoreInt32(&fetchInProgress, 0)
+					if err := refManager.FetchCaryaRefs("origin"); err != nil {
+						log.Printf("Auto-fetch: %v", err)
+					}
+				}()
+
+			case sig := <-sigCh:
+				switch sig {
+				case syscall.SIGUSR1:
+					log.Println("Received flush signal, flushing all chunks...")
+					if err := engineFeature.Engine().FlushAll(); err != nil {
+						log.Printf("Error flushing chunks: %v", err)
+					} else {
+						log.Println("All chunks flushed successfully")
+					}
+					if teamCfg.AutoPublish {
+						if teamCfg.AutoPush {
+							if err := engineFeature.Engine().PublishAndPushState("origin"); err != nil {
+								log.Printf("Error publishing state: %v", err)
+							}
+						} else if err := engineFeature.Engine().PublishState(); err != nil {
+							log.Printf("Error publishing state: %v", err)
+						}
+					}
+				case os.Interrupt, syscall.SIGTERM:
+					log.Println("Shutting down Carya daemon...")
+					engineFeature.Engine().FlushAll()
+					if teamCfg.AutoPublish {
+						if teamCfg.AutoPush {
+							engineFeature.Engine().PublishAndPushState("origin")
+						} else {
+							engineFeature.Engine().PublishState()
+						}
+					}
 					return
 				}
-			}
-		}()
-
-		for sig := range sigCh {
-			switch sig {
-			case syscall.SIGUSR1:
-				log.Println("Received flush signal, flushing all chunks...")
-				if err := engineFeature.Engine().FlushAll(); err != nil {
-					log.Printf("Error flushing chunks: %v", err)
-				} else {
-					log.Println("All chunks flushed successfully")
-				}
-			case os.Interrupt, syscall.SIGTERM:
-				log.Println("Shutting down Carya daemon...")
-				return
 			}
 		}
 	},
@@ -132,16 +174,7 @@ var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start Carya watcher in the background",
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
 		d := daemon.New(repo.PIDPath(), repo.LogPath())
 
@@ -164,11 +197,7 @@ var stopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the Carya watcher daemon",
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		repo := mustRepo()
 
 		d := daemon.New(repo.PIDPath(), repo.LogPath())
 
@@ -190,11 +219,7 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Check if Carya watcher is running",
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		repo := mustRepo()
 
 		d := daemon.New(repo.PIDPath(), repo.LogPath())
 
@@ -209,9 +234,9 @@ var statusCmd = &cobra.Command{
 				if err := json.Unmarshal(statusData, &status); err == nil {
 					mode := "active"
 					if status.IsIdle {
-						mode = "idle"
+						mode = "backing off"
 					}
-					fmt.Printf("  Flush interval: %s (%s mode)\n", status.FlushInterval, mode)
+					fmt.Printf("  Flush interval: %s (%s)\n", status.FlushInterval, mode)
 				}
 			}
 		} else {
@@ -224,11 +249,7 @@ var flushCmd = &cobra.Command{
 	Use:   "flush",
 	Short: "Flush all pending chunks to storage",
 	Run: func(cmd *cobra.Command, args []string) {
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		repo := mustRepo()
 
 		d := daemon.New(repo.PIDPath(), repo.LogPath())
 

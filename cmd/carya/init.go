@@ -8,7 +8,7 @@ import (
 	"carya/internal/repository"
 	"carya/internal/tui/model"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 )
 
@@ -18,6 +18,13 @@ var initCmd = &cobra.Command{
 	Short: "initialize a new Carya repository.",
 	Long:  `initialize a new Carya repository in the current directory and starts watching for file changes.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		// Carya builds on an existing git repository; fail fast with a clear
+		// message instead of letting the TUI's feature setup silently no-op.
+		if _, err := repository.New(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
 		// Create and run the TUI model
 		initModel := model.NewInit()
 		p := tea.NewProgram(&initModel)
@@ -39,8 +46,8 @@ var initCmd = &cobra.Command{
 				}
 			}
 
-			// Start the daemon if featcom is enabled
-			if initModel.IsFeatureEnabled("featcom") {
+			// Start the daemon if featcom is enabled and initialized successfully
+			if initModel.IsFeatureEnabled("featcom") && !initModel.HasFeatureError("featcom") {
 				fmt.Println("\nStarting Carya daemon...")
 
 				repo, err := repository.New()

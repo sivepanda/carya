@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"carya/internal/housekeeping"
+	"github.com/sivepanda/mycelia"
 	"carya/internal/tui/model"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 )
 
@@ -48,7 +48,7 @@ var housekeepingAddCmd = &cobra.Command{
 			return
 		}
 
-		config, err := housekeeping.LoadConfig()
+		config, err := mycelia.LoadConfig()
 		if err != nil {
 			fmt.Printf("Error loading config: %v\n", err)
 			return
@@ -69,7 +69,11 @@ var housekeepingAddCmd = &cobra.Command{
 			category = "post-checkout"
 		}
 
-		if err := config.AddCommand(category, command, workingDir, description); err != nil {
+		if err := config.AddCommand(category, mycelia.Command{
+			Command:     command,
+			WorkingDir:  workingDir,
+			Description: description,
+		}); err != nil {
 			fmt.Printf("Error adding command: %v\n", err)
 			return
 		}
@@ -88,7 +92,7 @@ var housekeepingListCmd = &cobra.Command{
 	Short: "List all housekeeping commands",
 	Long:  `List all configured housekeeping commands by category.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		config, err := housekeeping.LoadConfig()
+		config, err := mycelia.LoadConfig()
 		if err != nil {
 			fmt.Printf("Error loading config: %v\n", err)
 			return
@@ -113,6 +117,9 @@ var housekeepingListCmd = &cobra.Command{
 					if cmd.WorkingDir != "." && cmd.WorkingDir != "" {
 						fmt.Printf("     Working Dir: %s\n", cmd.WorkingDir)
 					}
+					if len(cmd.TriggerFiles) > 0 {
+						fmt.Printf("     Triggers: %s\n", strings.Join(cmd.TriggerFiles, ", "))
+					}
 				}
 			}
 		}
@@ -124,7 +131,7 @@ var housekeepingEditCmd = &cobra.Command{
 	Short: "Edit the housekeeping configuration file",
 	Long:  `Open the housekeeping configuration file in your preferred editor.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := housekeeping.OpenConfigInEditor(); err != nil {
+		if err := mycelia.OpenConfigInEditor(); err != nil {
 			fmt.Printf("Error opening config in editor: %v\n", err)
 			return
 		}
@@ -145,13 +152,13 @@ var housekeepingRunCmd = &cobra.Command{
 			return
 		}
 
-		config, err := housekeeping.LoadConfig()
+		config, err := mycelia.LoadConfig()
 		if err != nil {
 			fmt.Printf("Error loading config: %v\n", err)
 			return
 		}
 
-		executor := housekeeping.NewExecutor(config)
+		executor := mycelia.NewExecutor(config)
 		if err := executor.ExecuteCategory(category, autoApprove); err != nil {
 			fmt.Printf("Error executing %s commands: %v\n", category, err)
 			return
@@ -164,7 +171,7 @@ var housekeepingDetectCmd = &cobra.Command{
 	Short: "Detect package managers and build systems in the project",
 	Long:  `Scan the project directory to detect package managers and build systems.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		detector := housekeeping.NewDetector(".")
+		detector := mycelia.NewDetector(".")
 		detected, err := detector.DetectPackages()
 		if err != nil {
 			fmt.Printf("Error detecting packages: %v\n", err)
@@ -196,7 +203,7 @@ var housekeepingSuggestCmd = &cobra.Command{
 			return
 		}
 
-		detector := housekeeping.NewDetector(".")
+		detector := mycelia.NewDetector(".")
 		suggestions, err := detector.GetSuggestedCommands(category)
 		if err != nil {
 			fmt.Printf("Error getting suggestions: %v\n", err)
@@ -232,39 +239,65 @@ var housekeepingAutoCmd = &cobra.Command{
 			return
 		}
 
-		detector := housekeeping.NewDetector(".")
-		suggestions, err := detector.GetSuggestedCommands(category)
+		detector := mycelia.NewDetector(".")
+		detected, err := detector.DetectPackages()
 		if err != nil {
-			fmt.Printf("Error getting suggestions: %v\n", err)
+			fmt.Printf("Error detecting packages: %v\n", err)
 			return
 		}
 
-		if len(suggestions) == 0 {
-			fmt.Printf("No suggestions for %s commands.\n", category)
+		if len(detected) == 0 {
+			fmt.Printf("No package managers detected.\n")
 			return
 		}
 
-		config, err := housekeeping.LoadConfig()
+		config, err := mycelia.LoadConfig()
 		if err != nil {
 			fmt.Printf("Error loading config: %v\n", err)
 			return
 		}
 
-		fmt.Printf("Adding %d suggested %s commands:\n", len(suggestions), category)
-		for _, suggestion := range suggestions {
-			fmt.Printf("  • %s\n", suggestion.Description)
-			if err := config.AddCommand(category, suggestion.Command, suggestion.WorkingDir, suggestion.Description); err != nil {
-				fmt.Printf("Error adding command: %v\n", err)
-				return
+		count := 0
+		for _, pkg := range detected {
+			// Collect trigger files from the package type
+			var triggerFiles []string
+			if pkg.Type.DetectFile != "" {
+				triggerFiles = append(triggerFiles, pkg.Type.DetectFile)
+			}
+			triggerFiles = append(triggerFiles, pkg.Type.DetectFiles...)
+
+			commands, exists := pkg.Type.Commands[category]
+			if !exists {
+				continue
+			}
+			for _, suggestion := range commands {
+				fmt.Printf("  • %s\n", suggestion.Description)
+				if err := config.AddCommand(category, mycelia.Command{
+					Command:      suggestion.Command,
+					WorkingDir:   suggestion.WorkingDir,
+					Description:  suggestion.Description,
+					TriggerFiles: triggerFiles,
+				}); err != nil {
+					fmt.Printf("Error adding command: %v\n", err)
+					return
+				}
+				count++
 			}
 		}
+
+		if count == 0 {
+			fmt.Printf("No suggestions for %s commands.\n", category)
+			return
+		}
+
+		fmt.Printf("Adding %d suggested %s commands:\n", count, category)
 
 		if err := config.Save(); err != nil {
 			fmt.Printf("Error saving config: %v\n", err)
 			return
 		}
 
-		fmt.Printf("\nSuccessfully added %d %s commands!\n", len(suggestions), category)
+		fmt.Printf("\nSuccessfully added %d %s commands!\n", count, category)
 	},
 }
 

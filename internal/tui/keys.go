@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"github.com/charmbracelet/bubbles/key"
+	"charm.land/bubbles/v2/key"
 )
 
 // KeyMap defines the key bindings for TUI navigation
@@ -54,7 +54,7 @@ func DefaultKeys() KeyMap {
 			key.WithHelp("enter", "continue"),
 		),
 		Select: key.NewBinding(
-			key.WithKeys("x", " "),
+			key.WithKeys("x", "space"),
 			key.WithHelp("x/space", "select"),
 		),
 		Help: key.NewBinding(

@@ -21,13 +21,13 @@ See [AUTODETECT.md](internal/housekeeping/AUTODETECT.md) to contribute package m
 
 
 
-## Planned Components
 ### Asynchronous Team Tracking
-Utilizes your LSP to give you "windows" into the states of other active users' repositories, making it easier to ensure that you don't hit a merge conflict. (Of course, this feature really only works with small teams, as such **DANGER** this can be really messy for large teams. Don't say we didn't warn you!)
+Share your working state with your team via git refs. See what files your teammates are editing and predict merge conflicts before they happen.
 
+Use `carya publish` to share your state, `carya team` to see teammates, and `carya team conflicts <user>` to predict conflicts.
+
+**Note:** This feature works best with small teams. It can get noisy for large teams.
+
+## Planned Components
 ### Synchronous Development & Environment Sharing
 Creates a shell of a host user's environment and recreates it on the client, while also streaming files between users, enabling a faster, more localized synchronous development pathway.
-
-
-
-lorem ipsum dolor

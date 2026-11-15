@@ -1,27 +1,36 @@
 package model
 
 import (
+	"carya/internal/config"
+	"carya/internal/identity"
 	"carya/internal/tui"
 	"carya/internal/tui/shared"
 	"fmt"
+	"strings"
 
 	initializer "carya/internal/init"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // Screen states
 const (
 	StateWelcome = iota
+	StateGlobalDevice
 	StateFeatureSelect
 	StateConfirm
 	StateExecute
 	StateComplete
 )
+
+var globalConfigExistsFn = config.GlobalConfigExists
+var saveGlobalConfigFn = config.SaveGlobalConfig
+var defaultDeviceIDFn = identity.DefaultDeviceID
 
 // Feature options
 type Feature struct {
@@ -33,6 +42,8 @@ type Feature struct {
 var availableFeatures = []Feature{
 	{"Feature-Based Commits", "featcom", "Enable feature-based commit workflows"},
 	{"Automated Housekeeping", "housekeep", "Automated repository maintenance"},
+	{"Team Sync", "teamsync", "Auto-share working state with teammates via git refs"},
+	{"LSP Server", "lsp", "Editor integration for team conflict diagnostics"},
 }
 
 // Init represents the Bubble Tea model for the init command
@@ -48,7 +59,11 @@ type Init struct {
 	height             int
 	confirmSelection   bool
 	err                error
+	featureErrors      map[string]error
 	launchHousekeeping bool
+	needsGlobalSetup   bool
+	globalSetupError   string
+	deviceInput        textinput.Model
 }
 
 // NewInit creates a new init model
@@ -69,6 +84,13 @@ func NewInit() Init {
 		confirmSelection: true, // Default to Yes
 	}
 
+	m.needsGlobalSetup = !globalConfigExistsFn()
+	m.deviceInput = textinput.New()
+	m.deviceInput.Prompt = "Device ID: "
+	m.deviceInput.CharLimit = 120
+	m.deviceInput.SetWidth(42)
+	m.deviceInput.SetValue(defaultDeviceIDFn())
+
 	return m
 }
 
@@ -86,22 +108,26 @@ func (m *Init) handleFormSubmission() tea.Cmd {
 		// Create initializer with selected features
 		init, err := initializer.NewInitializer(selectedFeatures)
 		if err != nil {
-			return FormSubmittedMsg{Error: err, LaunchHousekeeping: false}
+			return FormSubmittedMsg{Error: err}
 		}
 
-		// Initialize the repository
+		// Initialize the repository (base failures are hard errors;
+		// individual feature failures are collected separately)
 		if err := init.Initialize(); err != nil {
-			return FormSubmittedMsg{Error: err, LaunchHousekeeping: false}
+			return FormSubmittedMsg{Error: err}
 		}
 
-		// Launch housekeeping TUI if housekeeping is enabled
-		return FormSubmittedMsg{Error: nil, LaunchHousekeeping: m.IsFeatureEnabled("housekeep")}
+		return FormSubmittedMsg{
+			FeatureErrors:      init.FeatureErrors(),
+			LaunchHousekeeping: m.IsFeatureEnabled("housekeep"),
+		}
 	}
 }
 
 // FormSubmittedMsg indicates that form processing is complete
 type FormSubmittedMsg struct {
 	Error              error
+	FeatureErrors      map[string]error
 	LaunchHousekeeping bool
 }
 
@@ -115,6 +141,12 @@ func (m *Init) IsFeatureEnabled(featureKey string) bool {
 	return m.selectedFeatures[featureKey]
 }
 
+// HasFeatureError returns true if a specific feature failed to initialize
+func (m *Init) HasFeatureError(featureKey string) bool {
+	_, has := m.featureErrors[featureKey]
+	return has
+}
+
 // Update handles messages and updates the model
 func (m *Init) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
@@ -122,9 +154,9 @@ func (m *Init) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case FormSubmittedMsg:
 		if msg.Error != nil {
-			// Store error and still go to complete state to show it
 			m.err = msg.Error
 		}
+		m.featureErrors = msg.FeatureErrors
 		m.launchHousekeeping = msg.LaunchHousekeeping
 		m.state = StateComplete
 		return m, nil
@@ -135,6 +167,31 @@ func (m *Init) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.state == StateGlobalDevice {
+			switch {
+			case key.Matches(msg, m.keys.Enter):
+				deviceID := strings.TrimSpace(m.deviceInput.Value())
+				if deviceID == "" {
+					m.globalSetupError = "Device ID cannot be empty"
+					return m, nil
+				}
+
+				if err := saveGlobalConfigFn(config.GlobalConfig{DeviceID: deviceID}); err != nil {
+					m.globalSetupError = fmt.Sprintf("Failed to save global settings: %v", err)
+					return m, nil
+				}
+
+				m.globalSetupError = ""
+				m.state = StateFeatureSelect
+				m.deviceInput.Blur()
+				return m, nil
+			}
+
+			var inputCmd tea.Cmd
+			m.deviceInput, inputCmd = m.deviceInput.Update(msg)
+			return m, inputCmd
+		}
+
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
@@ -170,6 +227,11 @@ func (m *Init) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Enter):
 			switch m.state {
 			case StateWelcome:
+				if m.needsGlobalSetup {
+					m.state = StateGlobalDevice
+					m.deviceInput.Focus()
+					return m, textinput.Blink
+				}
 				m.state = StateFeatureSelect
 				return m, nil
 
@@ -218,7 +280,7 @@ func (m *Init) getSelectedFeatures() []string {
 }
 
 // View renders the model
-func (m *Init) View() string {
+func (m *Init) View() tea.View {
 	var content string
 
 	switch m.state {
@@ -275,6 +337,26 @@ func (m *Init) View() string {
 		instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("↑/↓ navigate • x toggle • enter continue")
 
 		content = lipgloss.JoinVertical(lipgloss.Left, title, "", featuresBox, instructions)
+
+	case StateGlobalDevice:
+		title := tui.TitleStyle.Render("⚙ GLOBAL DEVICE SETUP")
+		desc := tui.HelpDescStyle.Render("This setting is shared across all Carya projects on this machine.")
+		desc2 := tui.SubtleTextStyle.Render("Shown in team views as: username (device-id)")
+
+		inputBlock := tui.ActiveBoxStyle.Width(72).Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				tui.TextStyle.Render("Choose a global device id:"),
+				"",
+				m.deviceInput.View(),
+			),
+		)
+
+		instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("type value • enter continue")
+		if m.globalSetupError != "" {
+			instructions = tui.ErrorStyle.Render(m.globalSetupError)
+		}
+
+		content = lipgloss.JoinVertical(lipgloss.Left, title, "", desc, desc2, "", inputBlock, instructions)
 
 	case StateConfirm:
 		title := tui.TitleStyle.Render("✓ CONFIRM SELECTION")
@@ -364,26 +446,7 @@ func (m *Init) View() string {
 
 			instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("enter exit")
 			content = lipgloss.JoinVertical(lipgloss.Left, title, "", errorBox, instructions)
-		} else if m.launchHousekeeping {
-			// Show housekeeping launch message
-			title := tui.SuccessStyle.Render("✓ SETUP COMPLETE")
-
-			var msgLines []string
-			msgLines = append(msgLines, tui.TextStyle.Render("Basic Carya repository initialized"))
-			msgLines = append(msgLines, "")
-			msgLines = append(msgLines, tui.HeaderStyle.Render("→ Launching housekeeping setup..."))
-
-			launchBox := lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(tui.ColorSuccess).
-				Padding(1, 2).
-				Width(60).
-				Render(lipgloss.JoinVertical(lipgloss.Left, msgLines...))
-
-			instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("enter continue")
-			content = lipgloss.JoinVertical(lipgloss.Left, title, "", launchBox, instructions)
 		} else {
-			// Show success state
 			title := tui.SuccessStyle.Render("✓ SETUP COMPLETE")
 
 			selected := m.getSelectedFeatures()
@@ -395,11 +458,21 @@ func (m *Init) View() string {
 				for _, featureKey := range selected {
 					for _, feature := range availableFeatures {
 						if feature.Key == featureKey {
-							summaryLines = append(summaryLines, tui.SuccessStyle.Render("✓")+" "+tui.TextStyle.Render(feature.Name))
+							if ferr, has := m.featureErrors[featureKey]; has {
+								summaryLines = append(summaryLines, tui.WarningStyle.Render("⚠")+" "+tui.TextStyle.Render(feature.Name))
+								summaryLines = append(summaryLines, tui.SubtleTextStyle.Render("    "+ferr.Error()))
+							} else {
+								summaryLines = append(summaryLines, tui.SuccessStyle.Render("✓")+" "+tui.TextStyle.Render(feature.Name))
+							}
 							break
 						}
 					}
 				}
+			}
+
+			if m.launchHousekeeping {
+				summaryLines = append(summaryLines, "")
+				summaryLines = append(summaryLines, tui.HeaderStyle.Render("→ Launching housekeeping setup..."))
 			}
 
 			successBox := lipgloss.NewStyle().
@@ -409,8 +482,49 @@ func (m *Init) View() string {
 				Width(60).
 				Render(lipgloss.JoinVertical(lipgloss.Left, summaryLines...))
 
-			instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("enter exit")
-			content = lipgloss.JoinVertical(lipgloss.Left, title, "", successBox, instructions)
+			var nextSteps []string
+			if m.selectedFeatures["teamsync"] && m.featureErrors["teamsync"] == nil {
+				nextSteps = append(nextSteps,
+					tui.HeaderStyle.Render("Team Sync"),
+					tui.SubtleTextStyle.Render("  The daemon will auto-publish and fetch team state."),
+					tui.SubtleTextStyle.Render("  Pending changes are flushed every 2 minutes,"),
+					tui.SubtleTextStyle.Render("  or manually via ")+tui.TextStyle.Render("carya flush")+tui.SubtleTextStyle.Render("."),
+					tui.SubtleTextStyle.Render("  Use ")+tui.TextStyle.Render("carya team")+tui.SubtleTextStyle.Render(" to see teammates."),
+					"",
+				)
+			}
+			if m.selectedFeatures["lsp"] && m.featureErrors["lsp"] == nil {
+				nextSteps = append(nextSteps,
+					tui.HeaderStyle.Render("LSP Server"),
+					tui.SubtleTextStyle.Render("  Add to your editor's LSP config:"),
+					"",
+					tui.TextStyle.Render("  Neovim (lspconfig)"),
+					tui.SubtleTextStyle.Render("    cmd = { \"carya\", \"lsp\" }"),
+					"",
+					tui.TextStyle.Render("  VS Code (settings.json)"),
+					tui.SubtleTextStyle.Render("    \"carya.lsp.command\": \"carya lsp\""),
+					"",
+					tui.SubtleTextStyle.Render("  Hover over diagnostics to see teammate diffs."),
+					"",
+				)
+			}
+
+			var sections []string
+			sections = append(sections, title, "", successBox)
+			if len(nextSteps) > 0 {
+				nextBox := lipgloss.NewStyle().
+					Padding(1, 2).
+					Width(60).
+					Render(lipgloss.JoinVertical(lipgloss.Left, nextSteps...))
+				sections = append(sections, "", nextBox)
+			}
+
+			hint := "enter exit"
+			if m.launchHousekeeping {
+				hint = "enter continue"
+			}
+			sections = append(sections, tui.HelpDescStyle.Margin(1, 0, 0, 0).Render(hint))
+			content = lipgloss.JoinVertical(lipgloss.Left, sections...)
 		}
 	}
 
@@ -419,8 +533,12 @@ func (m *Init) View() string {
 		m.help.ShowAll = true
 		helpView := m.help.View(m.keys)
 		help := tui.HelpStyle.Render(helpView)
-		return lipgloss.JoinVertical(lipgloss.Left, content, help)
+		v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, content, help))
+		v.AltScreen = true
+		return v
 	}
 
-	return content
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
 }

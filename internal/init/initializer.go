@@ -1,15 +1,17 @@
 package init
 
 import (
-	"bufio"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
+	"carya/internal/config"
 	"carya/internal/features/engine"
 	"carya/internal/features/watcher"
+	"carya/internal/git"
+	"carya/internal/identity"
 	"carya/internal/repository"
 )
 
@@ -19,6 +21,7 @@ type Initializer struct {
 	enabledFeatures []string
 	engineFeature   *engine.EngineFeature
 	watcherFeature  *watcher.WatcherFeature
+	featureErrors   map[string]error
 }
 
 // NewInitializer creates a new initializer with specified features
@@ -26,6 +29,7 @@ type Initializer struct {
 func NewInitializer(enabledFeatures []string) (*Initializer, error) {
 	repo, err := repository.New()
 	if err != nil {
+		log.Printf("Failed to create repository: %v", err)
 		return nil, fmt.Errorf("failed to create repository: %w", err)
 	}
 
@@ -45,105 +49,61 @@ func (i *Initializer) isFeatureEnabled(featureKey string) bool {
 	return false
 }
 
-// ensureGitignore ensures .carya/ is in .gitignore
-func (i *Initializer) ensureGitignore() error {
-	gitignorePath := ".gitignore"
-	caryaEntry := ".carya/"
+// Initialize sets up the repository and all features.
+// Base setup failures (repo, shadow) return a hard error.
+// Individual feature failures are collected in featureErrors so
+// other features can still proceed.
+func (i *Initializer) Initialize() error {
+	i.featureErrors = make(map[string]error)
 
-	// Check if .gitignore exists
-	content := ""
-	if data, err := os.ReadFile(gitignorePath); err == nil {
-		content = string(data)
+	// Create .carya directory
+	if err := i.repo.EnsureExists(); err != nil {
+		log.Printf("Failed to create repository: %v", err)
+		return fmt.Errorf("failed to create repository: %w", err)
+	}
 
-		// Check if .carya/ is already in .gitignore
-		scanner := bufio.NewScanner(strings.NewReader(content))
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == caryaEntry || line == ".carya" {
-				// Already present
-				return nil
+	// Ensure .carya/ is in .gitignore (non-fatal)
+	_ = i.repo.EnsureGitignore()
+
+	shadow := git.NewShadowRepo(i.repo.CaryaPath(), i.repo.RootPath())
+	if err := shadow.Initialize(); err != nil {
+		log.Printf("Failed to initialize shadow repository: %v", err)
+		return fmt.Errorf("failed to initialize shadow repository: %w", err)
+	}
+
+	_ = shadow.SeedIndexFromMainHEAD()
+
+	userIdentity := identity.NewUserIdentity(i.repo.CaryaPath())
+	_, _ = userIdentity.GetOrCreate()
+
+	if i.isFeatureEnabled("featcom") {
+		i.engineFeature = engine.NewEngineFeature()
+		if err := i.engineFeature.Initialize(i.repo); err != nil {
+			log.Printf("Failed to initialize engine: %v", err)
+			i.featureErrors["featcom"] = fmt.Errorf("engine: %w", err)
+		} else {
+			i.watcherFeature = watcher.NewWatcherFeature()
+			if err := i.watcherFeature.InitializeWithEngine(i.repo, i.engineFeature.Engine()); err != nil {
+				log.Printf("Failed to initialize watcher: %v", err)
+				i.featureErrors["featcom"] = fmt.Errorf("watcher: %w", err)
 			}
 		}
 	}
 
-	// Add .carya/ to .gitignore
-	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open .gitignore: %w", err)
-	}
-	defer f.Close()
-
-	// Add newline before entry if file doesn't end with one
-	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
-		if _, err := f.WriteString("\n"); err != nil {
-			return fmt.Errorf("failed to write to .gitignore: %w", err)
+	if i.isFeatureEnabled("teamsync") {
+		teamCfg := config.TeamConfig{AutoPublish: true, AutoFetch: true, AutoPush: true}
+		if err := config.SaveTeamConfig(i.repo.CaryaPath(), teamCfg); err != nil {
+			i.featureErrors["teamsync"] = err
 		}
-	}
-
-	// Add comment and entry
-	if len(content) == 0 {
-		// New file, add header
-		if _, err := f.WriteString("# Carya directory\n"); err != nil {
-			return fmt.Errorf("failed to write to .gitignore: %w", err)
-		}
-	}
-
-	if _, err := f.WriteString(caryaEntry + "\n"); err != nil {
-		return fmt.Errorf("failed to write to .gitignore: %w", err)
 	}
 
 	return nil
 }
 
-// Initialize sets up the repository and all features
-func (i *Initializer) Initialize() error {
-	fmt.Println("Initializing Carya repository...")
-
-	// Create .carya directory
-	if err := i.repo.EnsureExists(); err != nil {
-		return fmt.Errorf("failed to create repository: %w", err)
-	}
-
-	fmt.Println("Created .carya directory")
-
-	// Ensure .carya/ is in .gitignore
-	if err := i.ensureGitignore(); err != nil {
-		// Don't fail the init, just warn
-		fmt.Printf("Warning: Could not update .gitignore: %v\n", err)
-	} else {
-		fmt.Println("Added .carya/ to .gitignore")
-	}
-
-	// Initialize features based on user selection
-	if i.isFeatureEnabled("featcom") {
-		fmt.Println("Initializing feature-based commits...")
-
-		// Initialize engine feature
-		i.engineFeature = engine.NewEngineFeature()
-		if err := i.engineFeature.Initialize(i.repo); err != nil {
-			return fmt.Errorf("failed to initialize engine: %w", err)
-		}
-
-		// Initialize watcher feature with engine
-		i.watcherFeature = watcher.NewWatcherFeature()
-		if err := i.watcherFeature.InitializeWithEngine(i.repo, i.engineFeature.Engine()); err != nil {
-			return fmt.Errorf("failed to initialize watcher: %w", err)
-		}
-
-		fmt.Println("✓ Feature-based commits enabled")
-	}
-
-	if i.isFeatureEnabled("housekeep") {
-		fmt.Println("Initializing automated housekeeping...")
-		// TODO: Initialize housekeeping feature when implemented
-		fmt.Println("✓ Housekeeping configuration ready")
-	}
-
-	if len(i.enabledFeatures) == 0 {
-		fmt.Println("Basic Carya repository initialized (no features enabled)")
-	}
-
-	return nil
+// FeatureErrors returns per-feature initialization errors.
+// Features not in the map initialized successfully.
+func (i *Initializer) FeatureErrors() map[string]error {
+	return i.featureErrors
 }
 
 // Run starts the initialized system (only if features are enabled)
@@ -157,6 +117,7 @@ func (i *Initializer) Run() error {
 	// Start engine
 	if i.engineFeature != nil {
 		if err := i.engineFeature.Start(); err != nil {
+			log.Printf("Failed to start engine: %v", err)
 			return fmt.Errorf("failed to start engine: %w", err)
 		}
 		defer i.engineFeature.Stop()
@@ -165,6 +126,7 @@ func (i *Initializer) Run() error {
 	// Start watcher
 	if i.watcherFeature != nil {
 		if err := i.watcherFeature.Start(); err != nil {
+			log.Printf("Failed to start watcher: %v", err)
 			return fmt.Errorf("failed to start watcher: %w", err)
 		}
 		defer i.watcherFeature.Stop()

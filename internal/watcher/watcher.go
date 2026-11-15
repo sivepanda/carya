@@ -103,7 +103,7 @@ func (w *Watcher) watchLoop() {
 // loadGitignoreRules loads ignore rules from .gitignore file and adds default rules.
 func (w *Watcher) loadGitignoreRules() {
 	// Default ignore rules
-	w.gitignoreRules = []string{".git/", "node_modules/", ".vscode/", ".idea/"}
+	w.gitignoreRules = []string{".git/", ".carya/", "node_modules/", ".vscode/", ".idea/"}
 
 	gitignorePath := filepath.Join(w.watchDir, ".gitignore")
 	file, err := os.Open(gitignorePath)
@@ -126,6 +126,9 @@ func (w *Watcher) shouldIgnore(path string, isDir bool) bool {
 	relPath, err := filepath.Rel(w.watchDir, path)
 	if err != nil {
 		return false
+	}
+	if relPath == ".carya" || strings.HasPrefix(relPath, ".carya"+string(filepath.Separator)) {
+		return true
 	}
 
 	for _, rule := range w.gitignoreRules {
@@ -159,7 +162,6 @@ func (w *Watcher) matchesRule(path, rule string, isDir bool) bool {
 // handleEvent processes a file system event and triggers appropriate actions.
 func (w *Watcher) handleEvent(event fsnotify.Event) {
 	if event.Op&(fsnotify.Write|fsnotify.Create) != 0 {
-		log.Print("test")
 		fi, err := os.Stat(event.Name)
 		if err != nil {
 			return
@@ -191,6 +193,14 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	}
 
 	if event.Op&fsnotify.Remove == fsnotify.Remove {
+		if w.handler != nil && w.shouldTrackFile(event.Name) {
+			relPath, err := filepath.Rel(w.watchDir, event.Name)
+			if err != nil {
+				log.Printf("Failed to get relative path for deleted %s: %v", event.Name, err)
+				relPath = event.Name
+			}
+			w.handler.OnFileChange(relPath, nil)
+		}
 		w.fsWatcher.Remove(event.Name)
 	}
 }

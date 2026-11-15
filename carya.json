@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "post-pull": [
+    {
+      "command": "go mod download",
+      "working_dir": "",
+      "description": "Download Go dependencies",
+      "trigger_files": [
+        "go.mod"
+      ]
+    },
+    {
+      "command": "go mod tidy",
+      "working_dir": "",
+      "description": "Clean up Go dependencies",
+      "trigger_files": [
+        "go.mod"
+      ]
+    }
+  ],
+  "post-checkout": [
+    {
+      "command": "go mod download",
+      "working_dir": "",
+      "description": "Download Go dependencies",
+      "trigger_files": [
+        "go.mod"
+      ]
+    }
+  ]
+}

@@ -2,22 +2,23 @@ package model
 
 import (
 	"carya/internal/chunk"
-	"carya/internal/patch"
+	"carya/internal/compose"
 	"carya/internal/store"
 	"carya/internal/tui"
 	"carya/internal/tui/shared"
 	"fmt"
 	"log"
 	"path/filepath"
+	"sort"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // CommitStatus represents different stages in the commit process
@@ -29,6 +30,7 @@ const (
 	StatusConfirming
 	StatusCommitting
 	StatusWarning // New state for showing warnings
+	StatusApplyConflict
 	StatusDone
 	StatusError
 )
@@ -37,18 +39,24 @@ const (
 type ChunkStore interface {
 	GetRecentChunks(limit int) ([]chunk.Chunk, error)
 	FindChunks(filePath string) ([]chunk.Chunk, error)
+	UpdateChunkFeatureLabel(ids []chunk.ChunkID, label string) error
+	ClearChunkFeatureLabel(ids []chunk.ChunkID) error
+}
+
+type composerRow struct {
+	isFolder   bool
+	label      string
+	chunkIndex int
 }
 
 // CommitComposer represents the Bubble Tea model for selecting and committing diffs
 type CommitComposer struct {
 	help             help.Model
 	keys             tui.KeyMap
-	chunks           []chunk.Chunk
-	selectedChunks   map[int]bool
+	composer         *compose.Composer
 	cursor           int
 	listViewport     viewport.Model
 	diffViewport     viewport.Model
-	store            ChunkStore
 	width            int
 	height           int
 	ready            bool
@@ -62,10 +70,23 @@ type CommitComposer struct {
 	pendingWarnings  []string // Store warnings for the warning view
 	pendingPatch     string   // Store patch for applying after confirmation
 	pendingCommitMsg string   // Store commit message for applying after confirmation
+	rows             []composerRow
+	labelInput       textinput.Model
+	editingLabel     bool
+	statusLine       string
+	applyConflict    applyConflictState
+}
+
+type applyConflictState struct {
+	abortSelected bool
+	totalSelected int
+	applicable    map[int]bool
+	skipped       []string
+	commitMsg     string
 }
 
 // NewCommitComposer creates a new commit composer model
-func NewCommitComposer(store ChunkStore) (*CommitComposer, error) {
+func NewCommitComposer(store ChunkStore, repoPath string) (*CommitComposer, error) {
 	log.Println("Initializing commit composer")
 	h := help.New()
 	h.Styles.ShortDesc = tui.HelpDescStyle
@@ -78,35 +99,38 @@ func NewCommitComposer(store ChunkStore) (*CommitComposer, error) {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(tui.ColorAccent)
 
-	// Load recent chunks
-	log.Println("Loading recent chunks for commit composition")
-	chunks, err := store.GetRecentChunks(100)
+	composerModel, err := compose.New(store, repoPath)
 	if err != nil {
-		log.Printf("Error loading chunks: %v", err)
-		return nil, fmt.Errorf("failed to load chunks: %w", err)
+		log.Printf("Error initializing compose model: %v", err)
+		return nil, err
 	}
-	log.Printf("Loaded %d chunks for commit composition", len(chunks))
 
 	// Setup commit message input
 	ti := textinput.New()
 	ti.Placeholder = "Type commit message here..."
 	ti.CharLimit = 100
-	ti.Width = 60
+	ti.SetWidth(60)
 	ti.Prompt = ""
 
+	labelInput := textinput.New()
+	labelInput.Placeholder = "Feature label (example: composer/navigation)"
+	labelInput.CharLimit = 80
+	labelInput.SetWidth(60)
+	labelInput.Prompt = ""
+
 	m := &CommitComposer{
-		help:           h,
-		keys:           tui.DefaultKeys(),
-		chunks:         chunks,
-		selectedChunks: make(map[int]bool),
-		cursor:         0,
-		store:          store,
-		width:          80,
-		height:         24,
-		commitMsg:      ti,
-		status:         StatusSelecting,
-		spinner:        s,
+		help:       h,
+		keys:       tui.DefaultKeys(),
+		composer:   composerModel,
+		cursor:     0,
+		width:      80,
+		height:     24,
+		commitMsg:  ti,
+		labelInput: labelInput,
+		status:     StatusSelecting,
+		spinner:    s,
 	}
+	m.rebuildRows()
 
 	return m, nil
 }
@@ -138,6 +162,17 @@ func (m *CommitComposer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingCommitMsg = msg.commitMsg
 		log.Println("Showing corruption warning to user")
 		return m, nil
+	case applyConflictMsg:
+		m.status = StatusApplyConflict
+		m.applyConflict = applyConflictState{
+			abortSelected: true,
+			totalSelected: msg.totalSelected,
+			applicable:    msg.applicable,
+			skipped:       msg.skipped,
+			commitMsg:     msg.commitMsg,
+		}
+		log.Println("Showing apply conflict choices to user")
+		return m, nil
 	}
 
 	// Handle different states
@@ -150,16 +185,24 @@ func (m *CommitComposer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateConfirming(msg)
 	case StatusWarning:
 		return m.updateWarning(msg)
-	case StatusCommitting, StatusDone, StatusError:
-		// For these states, just handle quit
+	case StatusApplyConflict:
+		return m.updateApplyConflict(msg)
+	case StatusDone, StatusError:
+		if msg, ok := msg.(tea.KeyMsg); ok {
+			if key.Matches(msg, m.keys.Quit) || msg.String() == "enter" {
+				return m, tea.Quit
+			}
+		}
+	case StatusCommitting:
 		if msg, ok := msg.(tea.KeyMsg); ok {
 			if key.Matches(msg, m.keys.Quit) {
 				return m, tea.Quit
 			}
-			if msg.String() == "enter" && (m.status == StatusDone || m.status == StatusError) {
-				return m, tea.Quit
-			}
 		}
+		// Keep spinner animating
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -167,7 +210,6 @@ func (m *CommitComposer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateSelecting handles the chunk selection state
 func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
-
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -185,14 +227,43 @@ func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
 			shared.UpdateViewportSizes(&m.listViewport, &m.diffViewport, layout)
 		}
 
-		// Update diff content if chunks exist
-		if len(m.chunks) > 0 && m.cursor < len(m.chunks) {
+		if len(m.rows) > 0 {
 			m.updateDiffContent()
 		}
 
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.editingLabel {
+			switch msg.String() {
+			case "esc":
+				m.editingLabel = false
+				m.labelInput.Blur()
+				m.statusLine = "label edit cancelled"
+				return m, nil
+			case "enter":
+				label := strings.TrimSpace(m.labelInput.Value())
+				if label == "" {
+					m.statusLine = "feature label cannot be empty"
+					return m, nil
+				}
+				updated := m.assignLabelToSelected(label)
+				m.editingLabel = false
+				m.labelInput.Blur()
+				if updated == 0 {
+					m.statusLine = "select at least one chunk first"
+				} else {
+					m.statusLine = fmt.Sprintf("assigned %d chunk(s) to %q", updated, label)
+				}
+				m.updateDiffContent()
+				return m, nil
+			}
+
+			var cmd tea.Cmd
+			m.labelInput, cmd = m.labelInput.Update(msg)
+			return m, cmd
+		}
+
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
@@ -204,20 +275,47 @@ func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.Down):
-			if m.cursor < len(m.chunks)-1 {
+			if m.cursor < len(m.rows)-1 {
 				m.cursor++
 				m.updateDiffContent()
 			}
 
 		case key.Matches(msg, m.keys.Select):
-			// Toggle selection for the current chunk
-			if len(m.chunks) > 0 {
-				m.selectedChunks[m.cursor] = !m.selectedChunks[m.cursor]
+			m.toggleCurrentSelection()
+			m.updateDiffContent()
+
+		case msg.String() == "ctrl+s":
+			saved, err := m.persistPendingLabels()
+			if err != nil {
+				m.statusLine = fmt.Sprintf("save failed: %v", err)
+			} else if saved == 0 {
+				m.statusLine = "nothing to save"
+			} else {
+				m.statusLine = fmt.Sprintf("saved %d label update(s)", saved)
+			}
+
+		case msg.String() == "f":
+			if m.selectedChunkCount() == 0 {
+				m.statusLine = "select at least one chunk first"
+				break
+			}
+			m.editingLabel = true
+			m.labelInput.SetValue("")
+			m.labelInput.Focus()
+			m.statusLine = "type a feature label, then press enter"
+
+		case msg.String() == "p":
+			updated := m.clearLabelForSelected()
+			if updated == 0 {
+				m.statusLine = "select at least one chunk first"
+			} else {
+				m.statusLine = fmt.Sprintf("popped %d chunk(s) out of feature", updated)
+				m.updateDiffContent()
 			}
 
 		case msg.String() == "enter":
-			// Only proceed if at least one chunk is selected
-			if len(m.selectedChunks) > 0 {
+			// Only proceed if at least one chunk is actually selected
+			if m.selectedChunkCount() > 0 {
 				m.status = StatusEditing
 				m.commitMsg.Focus()
 				return m, textinput.Blink
@@ -234,13 +332,115 @@ func (m *CommitComposer) updateSelecting(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *CommitComposer) rebuildRows() {
+	type grouped struct {
+		label   string
+		indices []int
+	}
+
+	chunks := m.composer.Chunks()
+	groups := map[string][]int{}
+	for i, c := range chunks {
+		label := strings.TrimSpace(c.FeatureLabel)
+		groups[label] = append(groups[label], i)
+	}
+
+	var labels []string
+	for label := range groups {
+		if label != "" {
+			labels = append(labels, label)
+		}
+	}
+	sort.Strings(labels)
+
+	ordered := make([]grouped, 0, len(labels)+1)
+	ordered = append(ordered, grouped{label: "", indices: groups[""]})
+	for _, label := range labels {
+		ordered = append(ordered, grouped{label: label, indices: groups[label]})
+	}
+
+	rows := make([]composerRow, 0, len(chunks)+len(ordered))
+	for _, group := range ordered {
+		rows = append(rows, composerRow{isFolder: true, label: group.label, chunkIndex: -1})
+		for _, idx := range group.indices {
+			rows = append(rows, composerRow{label: group.label, chunkIndex: idx})
+		}
+	}
+
+	m.rows = rows
+	if len(m.rows) == 0 {
+		m.cursor = 0
+		return
+	}
+	if m.cursor >= len(m.rows) {
+		m.cursor = len(m.rows) - 1
+	}
+}
+
+func (m *CommitComposer) selectedChunkCount() int {
+	return m.composer.SelectedChunkCount()
+}
+
+func (m *CommitComposer) toggleCurrentSelection() {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return
+	}
+
+	row := m.rows[m.cursor]
+	if row.isFolder {
+		indices := m.chunkIndicesForLabel(row.label)
+		if len(indices) == 0 {
+			return
+		}
+
+		allSelected := true
+		for _, idx := range indices {
+			if !m.composer.IsSelected(idx) {
+				allSelected = false
+				break
+			}
+		}
+
+		for _, idx := range indices {
+			m.composer.SetSelected(idx, !allSelected)
+		}
+		return
+	}
+
+	m.composer.ToggleSelection(row.chunkIndex)
+}
+
+func (m *CommitComposer) chunkIndicesForLabel(label string) []int {
+	return m.composer.ChunkIndicesForLabel(label)
+}
+
+func (m *CommitComposer) assignLabelToSelected(label string) int {
+	updated := m.composer.AssignLabelToSelected(label)
+	if updated > 0 {
+		m.rebuildRows()
+	}
+	return updated
+}
+
+func (m *CommitComposer) clearLabelForSelected() int {
+	updated := m.composer.ClearLabelForSelected()
+	if updated > 0 {
+		m.rebuildRows()
+	}
+	return updated
+}
+
+func (m *CommitComposer) persistPendingLabels() (int, error) {
+	return m.composer.PersistPendingLabels()
+}
+
 // updateEditing handles the commit message editing state
 func (m *CommitComposer) updateEditing(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, m.keys.Quit):
+		case msg.String() == "ctrl+c":
 			return m, tea.Quit
 
 		case msg.String() == "esc":
@@ -288,55 +488,40 @@ func (m *CommitComposer) updateConfirming(msg tea.Msg) (tea.Model, tea.Cmd) {
 // createCommit performs the git operations to create a commit from selected diffs
 func (m *CommitComposer) createCommit() tea.Msg {
 	log.Println("Creating commit from selected diffs")
-
-	// Create a patch from the selected diffs using the patch package
-	log.Println("Creating patch from selected diffs")
-	result := patch.CreateFromChunks(m.chunks, m.selectedChunks)
-
-	log.Printf("%s", result.Patch)
-
-	// Check if we have a valid patch
-	if len(result.Patch) == 0 {
-		log.Println("No valid patches to apply")
-		return errMsg{fmt.Errorf("no valid patches to apply")}
-	}
-
-	log.Printf("Created patch with %d bytes", len(result.Patch))
-
-	// Log any cleanup warnings
-	if len(result.Warnings) > 0 {
-		log.Println("Warning: Potential corrupt content was detected and cleaned:")
-		for _, warning := range result.Warnings {
-			log.Println(warning)
-		}
-
-		// If we're in confirm mode and there were warnings, return with the warning
-		log.Println("Returning corruption warning to user")
-		return warningMsg{
-			warnings:  result.Warnings,
-			patch:     result.Patch,
-			commitMsg: m.commitMsg.Value(),
-		}
-	}
-
-	// Apply the patch using the patch package
-	log.Println("Applying patch to git index")
-	if err := patch.Apply(result.Patch); err != nil {
-		log.Printf("Error applying patch: %v", err)
-		return errMsg{err}
-	}
-	log.Println("Patch applied successfully")
-
-	// Create the commit using the patch package
-	log.Printf("Creating git commit with message: %s", m.commitMsg.Value())
-	output, err := patch.Commit(m.commitMsg.Value())
+	result, err := m.composer.CreateCommit(m.commitMsg.Value())
 	if err != nil {
-		log.Printf("Error creating commit: %v", err)
+		log.Printf("Error creating composed commit: %v", err)
 		return errMsg{err}
 	}
 
-	// Success - return the git output
-	log.Println("Commit created successfully")
+	if result.Warning != nil {
+		return warningMsg{
+			warnings:  result.Warning.Warnings,
+			patch:     result.Warning.Patch,
+			commitMsg: result.Warning.CommitMsg,
+		}
+	}
+
+	if result.ApplyConflict != nil {
+		return applyConflictMsg{
+			totalSelected: result.ApplyConflict.TotalSelected,
+			applicable:    result.ApplyConflict.Applicable,
+			skipped:       result.ApplyConflict.Skipped,
+			commitMsg:     result.ApplyConflict.CommitMsg,
+		}
+	}
+
+	m.result = result.Output
+	return successMsg{m.result}
+}
+
+func (m *CommitComposer) applyApplicablePatch() tea.Msg {
+	log.Println("Applying patch for applicable chunks only")
+	output, err := m.composer.ApplyApplicableCommit(m.applyConflict.applicable, m.applyConflict.commitMsg)
+	if err != nil {
+		return errMsg{err}
+	}
+
 	m.result = output
 	return successMsg{m.result}
 }
@@ -355,13 +540,22 @@ type warningMsg struct {
 	commitMsg string
 }
 
+type applyConflictMsg struct {
+	totalSelected int
+	applicable    map[int]bool
+	skipped       []string
+	commitMsg     string
+}
+
 // successMsg represents a success message
 type successMsg struct {
 	output string
 }
 
 // View renders the model
-func (m *CommitComposer) View() string {
+func (m *CommitComposer) View() tea.View {
+	var s string
+
 	if m.err != nil {
 		title := tui.ErrorStyle.Render("✗ ERROR")
 		errorMsg := tui.ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
@@ -374,10 +568,8 @@ func (m *CommitComposer) View() string {
 			Render(errorMsg)
 
 		instructions := tui.HelpDescStyle.Margin(1, 0, 0, 0).Render("q quit")
-		return lipgloss.JoinVertical(lipgloss.Center, title, "", errorBox, instructions)
-	}
-
-	if !m.ready {
+		s = lipgloss.JoinVertical(lipgloss.Center, title, "", errorBox, instructions)
+	} else if !m.ready {
 		title := tui.TitleStyle.Render("📋 LOADING CHUNKS")
 		spinnerView := m.spinner.View()
 		loadingText := tui.TextStyle.Render(" Loading chunks...")
@@ -387,32 +579,38 @@ func (m *CommitComposer) View() string {
 			"",
 			lipgloss.JoinHorizontal(lipgloss.Center, spinnerView, loadingText),
 		)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, loadingContent)
+		s = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, loadingContent)
+	} else {
+		switch m.status {
+		case StatusSelecting:
+			s = m.renderSelectionView()
+		case StatusEditing:
+			s = m.renderEditingView()
+		case StatusConfirming:
+			s = m.renderConfirmationView()
+		case StatusWarning:
+			s = m.renderWarningView()
+		case StatusApplyConflict:
+			s = m.renderApplyConflictView()
+		case StatusCommitting:
+			s = m.renderCommittingView()
+		case StatusDone:
+			s = m.renderDoneView()
+		case StatusError:
+			s = m.renderErrorView()
+		default:
+			s = "Unknown state"
+		}
 	}
 
-	switch m.status {
-	case StatusSelecting:
-		return m.renderSelectionView()
-	case StatusEditing:
-		return m.renderEditingView()
-	case StatusConfirming:
-		return m.renderConfirmationView()
-	case StatusWarning:
-		return m.renderWarningView()
-	case StatusCommitting:
-		return m.renderCommittingView()
-	case StatusDone:
-		return m.renderDoneView()
-	case StatusError:
-		return m.renderErrorView()
-	default:
-		return "Unknown state"
-	}
+	v := tea.NewView(s)
+	v.AltScreen = true
+	return v
 }
 
 // renderSelectionView shows the chunk selection interface
 func (m *CommitComposer) renderSelectionView() string {
-	if len(m.chunks) == 0 {
+	if len(m.composer.Chunks()) == 0 {
 		title := tui.TitleStyle.Render("📋 COMMIT COMPOSER")
 		emptyMsg := tui.SubtleTextStyle.Render("No chunks found")
 		helpMsg := tui.TextStyle.Render("Start making changes to see them here!")
@@ -427,23 +625,13 @@ func (m *CommitComposer) renderSelectionView() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 	}
 
-	// Render both panels
-	listPanel := m.renderChunkListPanel()
-	diffPanel := m.renderDiffPanel()
-
-	// Join horizontally
-	content := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, diffPanel)
-
-	// Add footer with better formatting
-	selectedCount := 0
-	for _, selected := range m.selectedChunks {
-		if selected {
-			selectedCount++
-		}
-	}
+	selectedCount := m.selectedChunkCount()
 
 	navHelp := tui.HelpKeyStyle.Render("↑/↓") + tui.HelpDescStyle.Render(" navigate")
 	selectHelp := tui.HelpKeyStyle.Render("space") + tui.HelpDescStyle.Render(" select")
+	labelHelp := tui.HelpKeyStyle.Render("f") + tui.HelpDescStyle.Render(" label")
+	popHelp := tui.HelpKeyStyle.Render("p") + tui.HelpDescStyle.Render(" pop")
+	saveHelp := tui.HelpKeyStyle.Render("ctrl+s") + tui.HelpDescStyle.Render(" save labels")
 	continueHelp := tui.HelpKeyStyle.Render("enter") + tui.HelpDescStyle.Render(" continue")
 	quitHelp := tui.HelpKeyStyle.Render("q") + tui.HelpDescStyle.Render(" quit")
 
@@ -451,47 +639,112 @@ func (m *CommitComposer) renderSelectionView() string {
 	if selectedCount > 0 {
 		selectedInfo = tui.SuccessStyle.Render(fmt.Sprintf(" • %d selected", selectedCount))
 	}
+	dirtyInfo := ""
+	if m.composer.DirtyLabels() {
+		dirtyInfo = tui.WarningStyle.Render(" • unsaved labels")
+	}
+	statusInfo := ""
+	if strings.TrimSpace(m.statusLine) != "" {
+		statusInfo = "\n" + tui.SubtleTextStyle.Render(m.statusLine)
+	}
 
 	footer := lipgloss.NewStyle().
 		Padding(0, 1).
-		Render(navHelp + " • " + selectHelp + " • " + continueHelp + " • " + quitHelp + selectedInfo)
+		Render(navHelp + " • " + selectHelp + " • " + labelHelp + " • " + popHelp + " • " + saveHelp + " • " + continueHelp + " • " + quitHelp + selectedInfo + dirtyInfo + statusInfo)
 
-	return lipgloss.JoinVertical(lipgloss.Left, content, footer)
+	if m.editingLabel {
+		promptHeader := tui.SubheaderStyle.Render("FEATURE LABEL")
+		promptBox := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(tui.ColorBorder).
+			Padding(1, 2).
+			Width(60).
+			Render(m.labelInput.View())
+		promptHelp := tui.HelpDescStyle.Render("enter apply • esc cancel")
+		footer = lipgloss.JoinVertical(lipgloss.Left, footer, "", promptHeader, promptBox, promptHelp)
+	}
+
+	paneHeight := m.height - lipgloss.Height(footer)
+	if paneHeight <= 0 {
+		return lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(footer)
+	}
+
+	// Render both panels
+	listPanel := m.renderChunkListPanel(paneHeight)
+	diffPanel := m.renderDiffPanel(paneHeight)
+
+	// Join horizontally
+	content := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, diffPanel)
+
+	return lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(
+		lipgloss.JoinVertical(lipgloss.Left, content, footer),
+	)
 }
 
 // renderChunkListPanel renders the left panel with selectable chunk list
-func (m *CommitComposer) renderChunkListPanel() string {
-	title := tui.HeaderStyle.Padding(1, 2).Render("📋 SELECT DIFFS")
+func (m *CommitComposer) renderChunkListPanel(height int) string {
+	listViewportWidth, listViewportHeight := shared.TitledPanelViewportSize(m.listWidth, height, 0)
+	m.listViewport.SetWidth(listViewportWidth)
+	m.listViewport.SetHeight(listViewportHeight)
+	chunks := m.composer.Chunks()
 
 	var items []string
-	for i, c := range m.chunks {
-		// Determine if this chunk is selected
-		checkBox := " [ ] "
-		if selected, ok := m.selectedChunks[i]; ok && selected {
-			checkBox = " [✓] "
-		}
-
+	for i, row := range m.rows {
 		cursor := "  "
 		if m.cursor == i {
 			cursor = "❯ "
 		}
 
-		// Format filename
-		filename := filepath.Base(c.FilePath)
-		if len(filename) > 20 {
-			filename = filename[:17] + "..."
-		}
+		var line string
+		if row.isFolder {
+			label := row.label
+			if label == "" {
+				label = "Unassigned"
+			}
+			indices := m.chunkIndicesForLabel(row.label)
+			selected := 0
+			for _, idx := range indices {
+				if m.composer.IsSelected(idx) {
+					selected++
+				}
+			}
 
-		// Format time
-		timeStr := tui.SubtleTextStyle.Render(c.StartTime.Format("15:04"))
-
-		line := cursor + checkBox + filename + " " + timeStr
-
-		if m.cursor == i {
-			line = tui.SelectedItemStyle.Render(line)
+			checkBox := "[ ]"
+			if selected == len(indices) && len(indices) > 0 {
+				checkBox = "[✓]"
+			} else if selected > 0 {
+				checkBox = "[~]"
+			}
+			line = fmt.Sprintf("%s %s %s (%d)", cursor, checkBox, label, len(indices))
+			line = tui.SubheaderStyle.Render(line)
 		} else {
-			line = tui.ItemStyle.Render(line)
+			chunkIdx := row.chunkIndex
+			if chunkIdx < 0 || chunkIdx >= len(chunks) {
+				continue
+			}
+			c := chunks[chunkIdx]
+			checkBox := "[ ]"
+			if m.composer.IsSelected(chunkIdx) {
+				checkBox = "[✓]"
+			}
+
+			filename := filepath.Base(c.FilePath)
+			if len(filename) > 20 {
+				filename = filename[:17] + "..."
+			}
+			timeStr := tui.SubtleTextStyle.Render(c.StartTime.Format("15:04"))
+			line = fmt.Sprintf("%s  %s %s %s", cursor, checkBox, filename, timeStr)
+			if m.cursor == i {
+				line = tui.SelectedItemStyle.Render(line)
+			} else {
+				line = tui.ItemStyle.Render(line)
+			}
 		}
+
+		if row.isFolder && m.cursor == i {
+			line = tui.SelectedItemStyle.Render(line)
+		}
+
 		items = append(items, line)
 	}
 
@@ -500,36 +753,78 @@ func (m *CommitComposer) renderChunkListPanel() string {
 	// Ensure selected item is visible
 	shared.EnsureItemVisible(&m.listViewport, m.cursor)
 
-	listStyle := lipgloss.NewStyle().
-		Width(m.listWidth).
-		Height(m.height).
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(tui.ColorBorder).
-		Padding(0, 1)
-
-	return listStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, m.listViewport.View()))
+	return shared.RenderTitledPanel("CHUNKS", m.listViewport.View(), m.listWidth, height, tui.ColorBorder)
 }
 
 // renderDiffPanel renders the right panel with diff content
-func (m *CommitComposer) renderDiffPanel() string {
-	if m.cursor >= len(m.chunks) {
-		return ""
+func (m *CommitComposer) renderDiffPanel(height int) string {
+	chunks := m.composer.Chunks()
+	if m.cursor >= len(m.rows) || m.cursor < 0 {
+		empty := tui.SubtleTextStyle.Render("No chunk selected")
+		diffViewportWidth, diffViewportHeight := shared.TitledPanelViewportSize(m.diffWidth, height, 0)
+		m.diffViewport.SetWidth(diffViewportWidth)
+		m.diffViewport.SetHeight(diffViewportHeight)
+		m.diffViewport.SetContent(empty)
+		return shared.RenderTitledPanel("DIFF", m.diffViewport.View(), m.diffWidth, height, tui.ColorTitle)
 	}
 
-	c := m.chunks[m.cursor]
+	row := m.rows[m.cursor]
+	if row.isFolder {
+		label := row.label
+		if label == "" {
+			label = "Unassigned"
+		}
+		header := tui.TextStyle.Bold(true).Render("Feature folder: " + label)
+		diffViewportWidth, diffViewportHeight := shared.TitledPanelViewportSize(m.diffWidth, height, lipgloss.Height(header))
+		m.diffViewport.SetWidth(diffViewportWidth)
+		m.diffViewport.SetHeight(diffViewportHeight)
+		return shared.RenderTitledPanel("DIFF", lipgloss.JoinVertical(lipgloss.Left, header, m.diffViewport.View()), m.diffWidth, height, tui.ColorTitle)
+	}
+
+	c := chunks[row.chunkIndex]
 	header := shared.RenderChunkHeader(c, tui.SubtleTextStyle, tui.TextStyle.Bold(true))
-	return shared.RenderDiffPanel(header, m.diffViewport.View(), m.diffWidth, m.height, tui.ColorTitle)
+	diffViewportWidth, diffViewportHeight := shared.TitledPanelViewportSize(m.diffWidth, height, lipgloss.Height(header))
+	m.diffViewport.SetWidth(diffViewportWidth)
+	m.diffViewport.SetHeight(diffViewportHeight)
+	return shared.RenderTitledPanel("DIFF", lipgloss.JoinVertical(lipgloss.Left, header, m.diffViewport.View()), m.diffWidth, height, tui.ColorTitle)
 }
 
 // updateDiffContent updates the diff viewport with the current chunk's diff
 func (m *CommitComposer) updateDiffContent() {
-	if m.cursor >= len(m.chunks) || !m.ready {
+	chunks := m.composer.Chunks()
+	if m.cursor >= len(m.rows) || !m.ready || m.cursor < 0 {
 		return
 	}
 
-	c := m.chunks[m.cursor]
-	diffContent := chunk.FormatDiff(c.Diff)
-	m.diffViewport.SetContent(diffContent)
+	row := m.rows[m.cursor]
+	if row.isFolder {
+		indices := m.chunkIndicesForLabel(row.label)
+		label := row.label
+		if label == "" {
+			label = "Unassigned"
+		}
+		selected := 0
+		files := make([]string, 0, len(indices))
+		for _, idx := range indices {
+			if idx < 0 || idx >= len(chunks) {
+				continue
+			}
+			if m.composer.IsSelected(idx) {
+				selected++
+			}
+			files = append(files, "- "+chunks[idx].FilePath)
+		}
+		if len(files) > 8 {
+			files = append(files[:8], fmt.Sprintf("- ... and %d more", len(files)-8))
+		}
+		summary := fmt.Sprintf("%s\n\nChunks: %d\nSelected: %d\n\nFiles:\n%s", label, len(indices), selected, strings.Join(files, "\n"))
+		m.diffViewport.SetContent(summary)
+		m.diffViewport.GotoTop()
+		return
+	}
+
+	c := chunks[row.chunkIndex]
+	m.diffViewport.SetContent(chunk.FormatDiff(c.Diff))
 	m.diffViewport.GotoTop()
 }
 
@@ -537,18 +832,13 @@ func (m *CommitComposer) updateDiffContent() {
 func (m *CommitComposer) renderEditingView() string {
 	title := tui.TitleStyle.Render("✏️  COMMIT MESSAGE")
 
-	// Count selected chunks
-	selectedCount := 0
-	for _, selected := range m.selectedChunks {
-		if selected {
-			selectedCount++
-		}
-	}
+	selectedCount := m.selectedChunkCount()
 
 	// List selected files
+	chunks := m.composer.Chunks()
 	var selectedFiles []string
-	for i, chunk := range m.chunks {
-		if selected, ok := m.selectedChunks[i]; ok && selected {
+	for i, chunk := range chunks {
+		if m.composer.IsSelected(i) {
 			selectedFiles = append(selectedFiles, "  "+filepath.Base(chunk.FilePath))
 			if len(selectedFiles) > 5 {
 				selectedFiles = append(selectedFiles, fmt.Sprintf("  ... and %d more files", selectedCount-5))
@@ -575,7 +865,7 @@ func (m *CommitComposer) renderEditingView() string {
 	// Instructions
 	escHelp := tui.HelpKeyStyle.Render("esc") + tui.HelpDescStyle.Render(" back")
 	enterHelp := tui.HelpKeyStyle.Render("enter") + tui.HelpDescStyle.Render(" continue")
-	quitHelp := tui.HelpKeyStyle.Render("q") + tui.HelpDescStyle.Render(" quit")
+	quitHelp := tui.HelpKeyStyle.Render("ctrl+c") + tui.HelpDescStyle.Render(" quit")
 
 	footer := lipgloss.NewStyle().
 		Padding(1, 1).
@@ -619,22 +909,39 @@ func (m *CommitComposer) updateWarning(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *CommitComposer) updateApplyConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if msg, ok := msg.(tea.KeyMsg); ok {
+		switch msg.String() {
+		case "up", "k", "down", "j":
+			m.applyConflict.abortSelected = !m.applyConflict.abortSelected
+			return m, nil
+		case "enter":
+			if m.applyConflict.abortSelected {
+				m.status = StatusSelecting
+				m.statusLine = "commit aborted due to stale chunk conflicts"
+				return m, nil
+			}
+
+			m.status = StatusCommitting
+			return m, m.applyApplicablePatch
+		case "esc":
+			m.status = StatusSelecting
+			m.statusLine = "commit aborted"
+			return m, nil
+		case "q", "Q":
+			return m, tea.Quit
+		}
+	}
+
+	return m, nil
+}
+
 // applyPendingPatch applies the previously generated patch after warning confirmation
 func (m *CommitComposer) applyPendingPatch() tea.Msg {
 	log.Println("Applying patch after warning confirmation")
-
-	// Apply the patch using the patch package
-	if err := patch.Apply(m.pendingPatch); err != nil {
-		log.Printf("Error applying patch: %v", err)
-		return errMsg{err}
-	}
-	log.Println("Patch applied successfully")
-
-	// Create the commit using the patch package
-	log.Printf("Creating git commit with message: %s", m.pendingCommitMsg)
-	output, err := patch.Commit(m.pendingCommitMsg)
+	output, err := m.composer.ApplyPatchAndCommit(m.pendingPatch, m.pendingCommitMsg)
 	if err != nil {
-		log.Printf("Error creating commit: %v", err)
+		log.Printf("Error applying pending patch: %v", err)
 		return errMsg{err}
 	}
 
@@ -648,13 +955,7 @@ func (m *CommitComposer) applyPendingPatch() tea.Msg {
 func (m *CommitComposer) renderConfirmationView() string {
 	title := tui.TitleStyle.Render("❓ CONFIRM COMMIT")
 
-	// Count selected chunks
-	selectedCount := 0
-	for _, selected := range m.selectedChunks {
-		if selected {
-			selectedCount++
-		}
-	}
+	selectedCount := m.selectedChunkCount()
 
 	message := fmt.Sprintf("Commit %d changes with message:", selectedCount)
 
@@ -761,6 +1062,79 @@ func (m *CommitComposer) renderWarningView() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
+func (m *CommitComposer) renderApplyConflictView() string {
+	title := tui.WarningStyle.Render("⚠ APPLY CONFLICTS DETECTED")
+
+	applicableCount := len(m.applyConflict.applicable)
+	skippedCount := len(m.applyConflict.skipped)
+
+	lines := []string{
+		fmt.Sprintf("Selected chunks: %d", m.applyConflict.totalSelected),
+		fmt.Sprintf("Applicable now: %d", applicableCount),
+		fmt.Sprintf("Conflicting now: %d", skippedCount),
+		"",
+		"Some selected chunks no longer apply cleanly.",
+	}
+
+	if skippedCount > 0 {
+		lines = append(lines, "")
+		for i, skipped := range m.applyConflict.skipped {
+			if i >= 5 {
+				lines = append(lines, fmt.Sprintf("  • ... and %d more", skippedCount-5))
+				break
+			}
+			lines = append(lines, "  • "+skipped)
+		}
+	}
+
+	abortOption := "  Abort whole commit"
+	continueOption := "  Commit only applicable chunks"
+	if m.applyConflict.abortSelected {
+		abortOption = tui.SelectedItemStyle.Render("❯ Abort whole commit")
+		continueOption = tui.ItemStyle.Render("  Commit only applicable chunks")
+	} else {
+		abortOption = tui.ItemStyle.Render("  Abort whole commit")
+		continueOption = tui.SelectedItemStyle.Render("❯ Commit only applicable chunks")
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(tui.ColorWarning).
+		Padding(1, 2).
+		Width(78).
+		Render(
+			lipgloss.JoinVertical(
+				lipgloss.Left,
+				tui.TextStyle.Render(strings.Join(lines, "\n")),
+				"",
+				tui.TextStyle.Bold(true).Render("How should compose proceed?"),
+				"",
+				abortOption,
+				continueOption,
+			),
+		)
+
+	footer := lipgloss.NewStyle().
+		Padding(1, 1).
+		Render(
+			tui.HelpKeyStyle.Render("↑/↓") + tui.HelpDescStyle.Render(" choose") +
+				" • " + tui.HelpKeyStyle.Render("enter") + tui.HelpDescStyle.Render(" confirm") +
+				" • " + tui.HelpKeyStyle.Render("esc") + tui.HelpDescStyle.Render(" cancel") +
+				" • " + tui.HelpKeyStyle.Render("q") + tui.HelpDescStyle.Render(" quit"),
+		)
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Center,
+		title,
+		"",
+		box,
+		"",
+		footer,
+	)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+}
+
 // renderCommittingView shows the commit in progress view
 func (m *CommitComposer) renderCommittingView() string {
 	title := tui.TitleStyle.Render("⏳ CREATING COMMIT")
@@ -818,7 +1192,7 @@ func (m *CommitComposer) renderErrorView() string {
 }
 
 // RunCommitComposer runs the commit composer TUI
-func RunCommitComposer(dataSourceName string) error {
+func RunCommitComposer(dataSourceName, repoPath string) error {
 	log.Println("Starting commit composer with database:", dataSourceName)
 	store, err := store.NewSQLiteStore(dataSourceName)
 	if err != nil {
@@ -828,7 +1202,7 @@ func RunCommitComposer(dataSourceName string) error {
 	log.Println("Successfully opened chunk store")
 	defer store.Close()
 
-	model, err := NewCommitComposer(store)
+	model, err := NewCommitComposer(store, repoPath)
 	if err != nil {
 		log.Printf("Error creating commit composer model: %v", err)
 		return err
@@ -836,7 +1210,7 @@ func RunCommitComposer(dataSourceName string) error {
 	log.Println("Successfully created commit composer model")
 
 	log.Println("Starting commit composer UI")
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		log.Printf("Error running commit composer UI: %v", err)
 		return fmt.Errorf("error running commit composer: %w", err)

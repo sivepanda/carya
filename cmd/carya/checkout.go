@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 
-	"carya/internal/housekeeping"
+	"carya/internal/git"
+
+	"github.com/sivepanda/mycelia"
 
 	"github.com/spf13/cobra"
 )
@@ -41,7 +43,7 @@ var checkoutCmd = &cobra.Command{
 		}
 
 		// Load and execute post-checkout commands
-		config, err := housekeeping.LoadConfig()
+		config, err := mycelia.LoadConfig()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading housekeeping config: %v\n", err)
 			os.Exit(1)
@@ -52,7 +54,7 @@ var checkoutCmd = &cobra.Command{
 			autoApprove = config.IsAutoApprove("post-checkout")
 		}
 
-		executor := housekeeping.NewExecutor(config)
+		executor := mycelia.NewExecutor(config)
 		if err := executor.ExecuteCategoryWithChangedFiles("post-checkout", changedFiles, autoApprove); err != nil {
 			fmt.Fprintf(os.Stderr, "Error executing post-checkout commands: %v\n", err)
 			os.Exit(1)
@@ -60,54 +62,27 @@ var checkoutCmd = &cobra.Command{
 	},
 }
 
-// checkoutBranch executes git checkout and returns whether housekeeping.json was changed and the list of changed files
+// checkoutBranch executes git checkout and returns whether carya.json was changed and the list of changed files
 func checkoutBranch(branch string) (bool, []string, error) {
-	wd, err := os.Getwd()
+	configPath, err := mycelia.GetConfigPath()
 	if err != nil {
-		return false, nil, fmt.Errorf("failed to get working directory: %w", err)
+		log.Printf("Failed to get config path: %v", err)
+		return false, nil, fmt.Errorf("failed to get config path: %w", err)
 	}
 
-	caryaDir := filepath.Join(wd, ".carya")
-	housekeepingPath := filepath.Join(caryaDir, "housekeeping.json")
-	relPath, err := filepath.Rel(wd, housekeepingPath)
-	if err != nil {
-		return false, nil, fmt.Errorf("failed to get relative path: %w", err)
-	}
+	return git.TrackConfigChange(configPath, func(wd string) error {
+		fmt.Printf("Checking out branch '%s'...\n", branch)
+		checkoutCmd := exec.Command("git", "checkout", branch)
+		checkoutCmd.Stdout = os.Stdout
+		checkoutCmd.Stderr = os.Stderr
+		checkoutCmd.Dir = wd
 
-	// Get the hash of housekeeping.json before checkout
-	beforeHash, _ := getFileHash(relPath)
-
-	// Get the current HEAD commit before checkout
-	beforeCommit, err := getHeadCommit()
-	if err != nil {
-		return false, nil, fmt.Errorf("failed to get HEAD commit: %w", err)
-	}
-
-	// Execute git checkout
-	fmt.Printf("Checking out branch '%s'...\n", branch)
-	checkoutCmd := exec.Command("git", "checkout", branch)
-	checkoutCmd.Stdout = os.Stdout
-	checkoutCmd.Stderr = os.Stderr
-	checkoutCmd.Dir = wd
-
-	if err := checkoutCmd.Run(); err != nil {
-		return false, nil, fmt.Errorf("git checkout failed: %w", err)
-	}
-
-	// Get the hash of housekeeping.json after checkout
-	afterHash, _ := getFileHash(relPath)
-
-	// Check if the file changed
-	housekeepingChanged := beforeHash != "" && afterHash != "" && beforeHash != afterHash
-
-	// Get the list of changed files
-	changedFiles, err := getChangedFiles(beforeCommit)
-	if err != nil {
-		// Don't fail if we can't get changed files, just return empty list
-		changedFiles = []string{}
-	}
-
-	return housekeepingChanged, changedFiles, nil
+		if err := checkoutCmd.Run(); err != nil {
+			log.Printf("Git checkout failed: %v", err)
+			return fmt.Errorf("git checkout failed: %w", err)
+		}
+		return nil
+	})
 }
 
 func init() {

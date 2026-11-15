@@ -4,8 +4,11 @@ package daemon
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -18,6 +21,7 @@ func startProcess(cmd *exec.Cmd, logFile *os.File) error {
 	}
 
 	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to start daemon: %v", err)
 		return fmt.Errorf("failed to start daemon: %w", err)
 	}
 
@@ -25,6 +29,22 @@ func startProcess(cmd *exec.Cmd, logFile *os.File) error {
 	go cmd.Wait()
 
 	return nil
+}
+
+func processMatches(pid int, executable string) bool {
+	actual, err := os.Readlink(filepath.Join("/proc", fmt.Sprint(pid), "exe"))
+	if err != nil {
+		// No /proc on this platform (e.g. macOS): identity can't be
+		// verified, so fall back to the plain liveness check.
+		if _, statErr := os.Stat("/proc"); statErr != nil {
+			return true
+		}
+		return false
+	}
+	// The link gains a " (deleted)" suffix once the binary on disk is
+	// replaced, e.g. after a rebuild of a still-running daemon.
+	actual = strings.TrimSuffix(actual, " (deleted)")
+	return actual == executable
 }
 
 // isProcessRunning checks if a process is running on Unix systems
@@ -43,11 +63,13 @@ func isProcessRunning(pid int) bool {
 func stopProcess(pid int) error {
 	process, err := os.FindProcess(pid)
 	if err != nil {
+		log.Printf("Failed to find process: %v", err)
 		return fmt.Errorf("failed to find process: %w", err)
 	}
 
 	// Send SIGTERM
 	if err := process.Signal(syscall.SIGTERM); err != nil {
+		log.Printf("Failed to stop daemon: %v", err)
 		return fmt.Errorf("failed to stop daemon: %w", err)
 	}
 

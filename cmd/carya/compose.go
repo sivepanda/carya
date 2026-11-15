@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 
-	"carya/internal/repository"
 	"carya/internal/tui/model"
 
 	"github.com/spf13/cobra"
@@ -19,26 +18,9 @@ var composeCmd = &cobra.Command{
 		dbPath, _ := cmd.Flags().GetString("db")
 
 		// Set up repository for default db path and logging
-		repo, err := repository.New()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error initializing repository: %v\n", err)
-			os.Exit(1)
-		}
+		repo := mustInitializedRepo()
 
-		if !repo.Exists() {
-			fmt.Fprintf(os.Stderr, "Error: Not a Carya repository. Run 'carya init' first.\n")
-			os.Exit(1)
-		}
-
-		// Set up logging immediately
-		logFile, err := os.OpenFile(repo.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to open log file: %v\n", err)
-		} else {
-			defer logFile.Close()
-			log.SetOutput(logFile)
-			log.Println("===== Compose command started =====")
-		}
+		log.Println("===== Compose command started =====")
 
 		// If no db path specified, use the default repository path
 		if dbPath == "" {
@@ -54,8 +36,14 @@ var composeCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		if syncRes, ran, err := maybeAutoChunkSync(repo.RootPath(), repo.CaryaPath(), dbPath); err != nil {
+			log.Printf("Automatic chunk sync before compose failed: %v", err)
+		} else if ran {
+			log.Printf("Automatic chunk sync before compose complete: kept %d, pruned %d", syncRes.kept, syncRes.pruned)
+		}
+
 		// Run the commit composer
-		if err := model.RunCommitComposer(dbPath); err != nil {
+		if err := model.RunCommitComposer(dbPath, repo.RootPath()); err != nil {
 			log.Printf("Error running commit composer: %v", err)
 			fmt.Fprintf(os.Stderr, "Error running commit composer: %v\n", err)
 			os.Exit(1)

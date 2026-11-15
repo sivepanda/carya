@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 // Spacing constants (inspired by Crush)
 const (

@@ -1,9 +1,13 @@
 package repository
 
 import (
+	"bufio"
 	"fmt"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // Repository represents a Carya repository
@@ -16,18 +20,28 @@ type Repository struct {
 func New() (*Repository, error) {
 	wd, err := os.Getwd()
 	if err != nil {
+		log.Printf("Failed to get working directory: %v", err)
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
 
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = wd
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("not inside a git repository (run 'git init' first): %w", err)
+	}
+	rootPath := strings.TrimSpace(string(output))
+
 	return &Repository{
-		rootPath:  wd,
-		caryaPath: filepath.Join(wd, ".carya"),
+		rootPath:  rootPath,
+		caryaPath: filepath.Join(rootPath, ".carya"),
 	}, nil
 }
 
 // EnsureExists creates the .carya directory if it doesn't exist
 func (r *Repository) EnsureExists() error {
 	if err := os.MkdirAll(r.caryaPath, 0755); err != nil {
+		log.Printf("Failed to create .carya directory: %v", err)
 		return fmt.Errorf("failed to create .carya directory: %w", err)
 	}
 	return nil
@@ -67,4 +81,61 @@ func (r *Repository) LogPath() string {
 // StatusPath returns the path to the daemon status file
 func (r *Repository) StatusPath() string {
 	return filepath.Join(r.caryaPath, "status.json")
+}
+
+// ShadowPath returns the path to the shadow git repository
+func (r *Repository) ShadowPath() string {
+	return filepath.Join(r.caryaPath, "shadow")
+}
+
+// UserIDPath returns the path to the user identity file
+func (r *Repository) UserIDPath() string {
+	return filepath.Join(r.caryaPath, "user-id")
+}
+
+// EnsureGitignore ensures .carya/ is listed in the .gitignore file.
+func (r *Repository) EnsureGitignore() error {
+	gitignorePath := filepath.Join(r.rootPath, ".gitignore")
+	caryaEntry := ".carya/"
+
+	content := ""
+	if data, err := os.ReadFile(gitignorePath); err == nil {
+		content = string(data)
+
+		scanner := bufio.NewScanner(strings.NewReader(content))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == caryaEntry || line == ".carya" {
+				return nil
+			}
+		}
+	}
+
+	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("Failed to open .gitignore: %v", err)
+		return fmt.Errorf("failed to open .gitignore: %w", err)
+	}
+	defer f.Close()
+
+	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+		if _, err := f.WriteString("\n"); err != nil {
+			log.Printf("Failed to write to .gitignore: %v", err)
+			return fmt.Errorf("failed to write to .gitignore: %w", err)
+		}
+	}
+
+	if len(content) == 0 {
+		if _, err := f.WriteString("# Carya directory\n"); err != nil {
+			log.Printf("Failed to write to .gitignore: %v", err)
+			return fmt.Errorf("failed to write to .gitignore: %w", err)
+		}
+	}
+
+	if _, err := f.WriteString(caryaEntry + "\n"); err != nil {
+		log.Printf("Failed to write to .gitignore: %v", err)
+		return fmt.Errorf("failed to write to .gitignore: %w", err)
+	}
+
+	return nil
 }
