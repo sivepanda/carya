@@ -105,10 +105,56 @@ func (c *Checker) ForPaths(me string, mine git.UserRef, paths []string) ([]Chang
 	return changes, nil
 }
 
+// State summarizes one peer's published state.
+type State struct {
+	UserID    string    `json:"user_id"`
+	Files     []string  `json:"files"` // changed against the peer's own base
+	Published time.Time `json:"published,omitempty"`
+}
+
+// Overview lists the peers whose published states change anything, with the
+// files they change, ordered by most recently published.
+func (c *Checker) Overview(me string) ([]State, error) {
+	head, err := c.refs.ResolveRef("HEAD")
+	if err != nil {
+		head = ""
+	}
+	refs, err := c.refs.ListUserRefs()
+	if err != nil {
+		return nil, err
+	}
+	var states []State
+	for _, peer := range refs {
+		base := peer.Base(head)
+		if peer.UserID == me || base == "" {
+			continue
+		}
+		touched, err := c.changedPaths(base, peer.TreeHash, nil)
+		if err != nil || len(touched) == 0 {
+			continue
+		}
+		st := State{UserID: peer.UserID, Published: c.publishedAt(peer)}
+		for _, t := range touched {
+			st.Files = append(st.Files, t.path)
+		}
+		states = append(states, st)
+	}
+	sort.Slice(states, func(i, j int) bool {
+		if !states[i].Published.Equal(states[j].Published) {
+			return states[i].Published.After(states[j].Published)
+		}
+		return states[i].UserID < states[j].UserID
+	})
+	return states, nil
+}
+
 type touchedPath struct{ status, path string }
 
 func (c *Checker) changedPaths(base, tree string, paths []string) ([]touchedPath, error) {
-	args := append([]string{"diff-tree", "-r", "-z", "--no-renames", "--name-status", base, tree, "--"}, paths...)
+	args := []string{"diff-tree", "-r", "-z", "--no-renames", "--name-status", base, tree}
+	if len(paths) > 0 {
+		args = append(append(args, "--"), paths...)
+	}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = c.repoRoot
 	out, err := cmd.Output()

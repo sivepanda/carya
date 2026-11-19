@@ -96,4 +96,12 @@ func TestForPathsReportsPeerChangesAndConflicts(t *testing.T) {
 	if Summary(nil, time.Now()) != "" {
 		t.Fatal("empty summary expected")
 	}
+
+	overview, err := c.Overview("me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(overview) != 1 || overview[0].UserID != "bob" || strings.Join(overview[0].Files, ",") != "shared.txt" {
+		t.Fatalf("unexpected overview: %+v", overview)
+	}
 }
