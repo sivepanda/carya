@@ -130,9 +130,29 @@ your identity and the repository's commit hooks apply.`,
 		fmt.Print(out)
 		rest, err := hunks.List(root)
 		if err == nil {
-			fmt.Printf("Committed %d hunk(s); %d left uncommitted.\n", len(picked), len(rest))
+			fmt.Printf("Committed %d hunk(s); %s\n", len(picked), leftover(rest))
 		}
 	},
+}
+
+// leftover says in one line what a commit left uncommitted, naming the files
+// so an agent can go on to commit the next group.
+func leftover(rest []hunks.Hunk) string {
+	if len(rest) == 0 {
+		return "nothing left uncommitted."
+	}
+	var files []string
+	for i, h := range rest {
+		if i == 0 || rest[i-1].Path != h.Path {
+			files = append(files, h.Path)
+		}
+	}
+	more := ""
+	if len(files) > 5 {
+		more = fmt.Sprintf(" and %d more", len(files)-5)
+		files = files[:5]
+	}
+	return fmt.Sprintf("%d left in %s%s.", len(rest), strings.Join(files, ", "), more)
 }
 
 func init() {
