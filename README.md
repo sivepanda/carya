@@ -31,13 +31,19 @@ Use `carya publish` to share your state, `carya team` to see teammates, and `car
 ### Coding Agents
 Run several coding agents on one repository without them stepping on each other. Each agent's checkout (a clone or a worktree) gets its own identity and publishes what it has on disk after every tool call, shell commands included. Before an agent edits a file another agent is changing, Carya adds that agent's change to its context, and says whether the two would conflict.
 
-Set it up for Claude Code with one command, no prompts:
+Set it up with one command, no prompts:
 
 ```bash
-carya setup claude
+carya setup claude     # Claude Code: hooks in .claude/settings.local.json
+carya setup codex      # Codex: hooks in .codex/hooks.json
+carya setup opencode   # OpenCode: a plugin in .opencode/plugins/carya.ts
 ```
 
-This writes Carya's hooks into `.claude/settings.local.json` and keeps `.carya/` out of git through `.git/info/exclude`, so no tracked file changes. Use `--scope project` to commit the hooks for everyone, or `--scope user` to install them once for every repository you run setup in. `carya setup claude --remove` takes them out again.
+By default nothing tracked changes: Carya keeps `.carya/` and the files it writes out of git through `.git/info/exclude`. Use `--scope project` to commit the setup for everyone, or `--scope user` to install it once in your user config and have it switch on in each repository you run setup in. `--remove` takes it out again.
+
+- **Claude Code** picks the hooks up immediately. Before Claude edits a file another agent is changing, that change is added to its context.
+- **Codex** asks you to approve new hooks once: start `codex`, trust the project, then approve Carya's hooks in `/hooks`. Before Codex applies a patch to a file another agent is changing, that change is added to its context.
+- **OpenCode** (1.x and 2.x) loads the plugin at startup. OpenCode plugins can't add context before a tool runs, so after an edit Carya appends other agents' changes to the edited files to the tool output.
 
 Use `carya check <file>` to see other agents' unfinished changes to a file yourself. Agents in worktrees of the same repository see each other with no network; with an `origin` remote, states are also pushed to `refs/carya/*`, which does not show up as branches on GitHub. Cloud sessions don't share state yet.
 
