@@ -73,10 +73,6 @@ var daemonCmd = &cobra.Command{
 			}
 		}
 
-		if err := refManager.SetBaseRef(); err != nil {
-			log.Printf("Note: Could not set base ref: %v", err)
-		}
-
 		engineFeature := engine.NewEngineFeature()
 		if err := engineFeature.Initialize(repo); err != nil {
 			log.Fatalf("Failed to initialize engine: %v", err)

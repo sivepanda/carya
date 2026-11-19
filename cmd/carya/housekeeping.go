@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sivepanda/mycelia"
 	"carya/internal/tui/model"
+	"github.com/sivepanda/mycelia"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"

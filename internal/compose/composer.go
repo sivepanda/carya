@@ -9,6 +9,10 @@ import (
 	"strings"
 )
 
+// defaultRecentChunkLimit is how many of the most recent chunks decide which
+// files compose shows. Every chunk of those files is loaded, so their stacks
+// apply from the bottom; files with no recent chunk are left out, which keeps
+// the list bounded however large the store grows.
 const defaultRecentChunkLimit = 100
 
 // trlop darfh
@@ -16,7 +20,7 @@ const defaultRecentChunkLimit = 100
 //plor glor troll
 
 type ChunkStore interface {
-	GetRecentChunks(limit int) ([]chunk.Chunk, error)
+	GetChunksOfRecentFiles(limit int) ([]chunk.Chunk, error)
 	UpdateChunkFeatureLabel(ids []chunk.ChunkID, label string) error
 	ClearChunkFeatureLabel(ids []chunk.ChunkID) error
 	DeleteChunks(ids []chunk.ChunkID) error
@@ -51,7 +55,7 @@ type ApplyConflict struct {
 }
 
 func New(store ChunkStore, repoPath string) (*Composer, error) {
-	chunks, err := store.GetRecentChunks(defaultRecentChunkLimit)
+	chunks, err := store.GetChunksOfRecentFiles(defaultRecentChunkLimit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chunks: %w", err)
 	}
@@ -270,10 +274,13 @@ func (c *Composer) ApplyPatchAndCommit(patchText, commitMsg string) (string, err
 // (rate-limited) chunk sync, and selecting one again fails to apply.
 // Selected chunks that were skipped are left alone.
 func (c *Composer) pruneCommittedChunks() {
+	indices := c.SelectedChunkIndices()
+	applied := chunk.AppliedAtHEADAll(c.repoPath, c.chunksAt(indices))
+
 	var ids []chunk.ChunkID
-	for i, ch := range c.chunks {
-		if c.selected[i] && chunk.AppliedAtHEAD(c.repoPath, ch) {
-			ids = append(ids, ch.ID)
+	for k, i := range indices {
+		if applied[k] {
+			ids = append(ids, c.chunks[i].ID)
 		}
 	}
 	if len(ids) == 0 {
@@ -299,23 +306,34 @@ func (c *Composer) ApplyApplicableCommit(applicable map[int]bool, commitMsg stri
 	return c.ApplyPatchAndCommit(result.Patch, commitMsg)
 }
 
+// classifySelectedChunks splits the selection into the chunks that can be
+// committed together and the ones that must be skipped. The selected chunks
+// are judged as a set, so a chunk recorded on top of an earlier selected chunk
+// of the same file is applicable along with it. A chunk recorded on top of a
+// binary change HEAD does not have yet is worth keeping, but cannot be
+// applied, since the binary change itself cannot be, so it is skipped.
 func (c *Composer) classifySelectedChunks() (map[int]bool, []string) {
 	applicable := make(map[int]bool)
 	var skipped []string
 
-	for i, ch := range c.chunks {
-		if selected, ok := c.selected[i]; !ok || !selected {
-			continue
-		}
-
-		decision, reason := chunk.DecideRetention(c.repoPath, ch)
-		if decision == chunk.DecisionKeep {
+	indices := c.SelectedChunkIndices()
+	for k, r := range chunk.DecideRetentionAll(c.repoPath, c.chunksAt(indices)) {
+		i := indices[k]
+		if r.Decision == chunk.DecisionKeep && r.Reason != chunk.ReasonOnBinary {
 			applicable[i] = true
 			continue
 		}
 
-		skipped = append(skipped, fmt.Sprintf("%s (%s)", ch.FilePath, reason))
+		skipped = append(skipped, fmt.Sprintf("%s (%s)", c.chunks[i].FilePath, r.Reason))
 	}
 
 	return applicable, skipped
+}
+
+func (c *Composer) chunksAt(indices []int) []chunk.Chunk {
+	out := make([]chunk.Chunk, len(indices))
+	for k, i := range indices {
+		out[k] = c.chunks[i]
+	}
+	return out
 }

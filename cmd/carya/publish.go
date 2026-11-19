@@ -44,7 +44,8 @@ it. Use --local-only to skip the push and only update the local ref.`,
 
 		// Update ref
 		refManager := git.NewRefManager(repo.RootPath())
-		if err := refManager.UpdateUserTreeRef(userID, treeHash); err != nil {
+		state, err := refManager.PublishUserState(userID, treeHash)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error updating ref: %v\n", err)
 			os.Exit(1)
 		}
@@ -53,6 +54,12 @@ it. Use --local-only to skip the push and only update the local ref.`,
 		log.Printf("Published working state as %s\n", userID)
 		fmt.Printf("  Tree hash: %s\n", treeHash[:12])
 		log.Printf("  Tree hash: %s\n", treeHash[:12])
+		base := "(none: no commits yet)"
+		if state.BaseCommit != "" {
+			base = shortHash(state.BaseCommit)
+		}
+		fmt.Printf("  Base: %s\n", base)
+		log.Printf("  Base: %s\n", base)
 		refPath := git.UserTreeRefPath(userID)
 		fmt.Printf("  Ref: %s\n", refPath)
 		log.Printf("  Ref: %s\n", refPath)

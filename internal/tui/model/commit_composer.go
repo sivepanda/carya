@@ -38,6 +38,7 @@ const (
 // ChunkStore interface for retrieving chunks
 type ChunkStore interface {
 	GetRecentChunks(limit int) ([]chunk.Chunk, error)
+	GetChunksOfRecentFiles(limit int) ([]chunk.Chunk, error)
 	FindChunks(filePath string) ([]chunk.Chunk, error)
 	UpdateChunkFeatureLabel(ids []chunk.ChunkID, label string) error
 	ClearChunkFeatureLabel(ids []chunk.ChunkID) error

@@ -1,6 +1,7 @@
 package chunk
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -137,5 +138,412 @@ func TestDecideRetention(t *testing.T) {
 		if decision != DecisionKeep || reason != "binary path still modified" {
 			t.Fatalf("expected keep for modified binary, got %s (%s)", decision, reason)
 		}
+	})
+}
+
+// makeRepoWith commits files as the repository's first commit.
+func makeRepoWith(t *testing.T, files map[string]string) string {
+	t.Helper()
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-q")
+	for path, content := range files {
+		writeRepoFile(t, repo, path, content)
+	}
+	gitRun(t, repo, "add", "-A")
+	commitAll(t, repo, "base")
+	return repo
+}
+
+func writeRepoFile(t *testing.T, repo, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, path), []byte(content), 0644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func commitAll(t *testing.T, repo, msg string) {
+	t.Helper()
+	gitRun(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-a", "-m", msg)
+}
+
+// recordStack records one chunk per version of path the way the daemon does:
+// the first is diffed against HEAD and each later one against the version
+// before it. Chunk i starts at start+i seconds. The repository is reset to
+// HEAD afterwards.
+func recordStack(t *testing.T, repo, path string, start time.Time, versions ...string) []Chunk {
+	t.Helper()
+	var chunks []Chunk
+	for i, v := range versions {
+		writeRepoFile(t, repo, path, v)
+		diff := gitRun(t, repo, "diff", "--", path) // against the previous version, staged below
+		if strings.TrimSpace(diff) == "" {
+			t.Fatalf("version %d of %s made no diff", i, path)
+		}
+		gitRun(t, repo, "add", path)
+		at := start.Add(time.Duration(i) * time.Second)
+		chunks = append(chunks, Chunk{
+			ID:        ChunkID(fmt.Sprintf("%s-%d", path, at.UnixNano())),
+			FilePath:  path,
+			Diff:      diff,
+			StartTime: at,
+			EndTime:   at.Add(time.Millisecond),
+		})
+	}
+	gitRun(t, repo, "reset", "-q", "--hard")
+	return chunks
+}
+
+// newestFirst returns chunks in the order the store hands them out.
+func newestFirst(chunks ...Chunk) []Chunk {
+	out := make([]Chunk, len(chunks))
+	for i, c := range chunks {
+		out[len(chunks)-1-i] = c
+	}
+	return out
+}
+
+func checkRetention(t *testing.T, chunks []Chunk, got []Retention, want map[ChunkID]Retention) {
+	t.Helper()
+	if len(got) != len(chunks) {
+		t.Fatalf("got %d decisions for %d chunks", len(got), len(chunks))
+	}
+	for i, c := range chunks {
+		if got[i] != want[c.ID] {
+			t.Errorf("%s: got %s (%s), want %s (%s)", c.ID, got[i].Decision, got[i].Reason, want[c.ID].Decision, want[c.ID].Reason)
+		}
+	}
+}
+
+var (
+	keep      = Retention{DecisionKeep, "still applicable"}
+	committed = Retention{DecisionPrune, "already applied/committed"}
+	upstream  = Retention{DecisionPrune, "already in upstream"}
+	noMatch   = Retention{DecisionPrune, "no longer matches"}
+)
+
+const stackBase = "one\ntwo\nthree\n"
+
+// Each version changes a line next to the previous change, so every later
+// chunk's hunk context includes the earlier chunk's result.
+var stackVersions = []string{
+	"one\nTWO\nthree\n",
+	"one\nTWO\nTHREE\n",
+	"ONE\nTWO\nTHREE\n",
+}
+
+func TestDecideRetentionAllStackedChunks(t *testing.T) {
+	start := time.Now()
+
+	t.Run("whole stack kept", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, stackVersions...)
+
+		// Judged on its own against HEAD, a later chunk does not apply.
+		if d, reason := DecideRetention(repo, s[1]); d != DecisionPrune || reason != "no longer matches" {
+			t.Fatalf("precondition: chunk 2 alone should not apply to HEAD, got %s (%s)", d, reason)
+		}
+
+		chunks := newestFirst(s...)
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			s[0].ID: keep, s[1].ID: keep, s[2].ID: keep,
+		})
+	})
+
+	t.Run("committed bottom chunk pruned, chunks above kept", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, stackVersions...)
+		writeRepoFile(t, repo, "file.txt", stackVersions[0])
+		commitAll(t, repo, "first chunk")
+
+		chunks := newestFirst(s...)
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			s[0].ID: committed, s[1].ID: keep, s[2].ID: keep,
+		})
+	})
+
+	t.Run("stack committed together counts as committed", func(t *testing.T) {
+		// The second chunk rewrites the first one's line, so the first no
+		// longer reverse-applies to HEAD on its own.
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, "one\nTWO\nthree\n", "one\nTWO!\nthree\n")
+		writeRepoFile(t, repo, "file.txt", "one\nTWO!\nthree\n")
+		commitAll(t, repo, "both chunks")
+
+		if AppliedAtHEAD(repo, s[0]) {
+			t.Fatal("precondition: chunk 1 alone should not reverse-apply to HEAD")
+		}
+
+		chunks := newestFirst(s...)
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			s[0].ID: committed, s[1].ID: committed,
+		})
+		if got := AppliedAtHEADAll(repo, chunks); !got[0] || !got[1] {
+			t.Fatalf("AppliedAtHEADAll = %v, want both applied", got)
+		}
+	})
+
+	t.Run("stack in upstream only is pruned", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		remote := filepath.Join(t.TempDir(), "remote.git")
+		gitRun(t, repo, "init", "-q", "--bare", remote)
+		gitRun(t, repo, "remote", "add", "origin", remote)
+		gitRun(t, repo, "push", "-q", "-u", "origin", "HEAD")
+
+		s := recordStack(t, repo, "file.txt", start, "one\nTWO\nthree\n", "one\nTWO!\nthree\n")
+		writeRepoFile(t, repo, "file.txt", "one\nTWO!\nthree\n")
+		commitAll(t, repo, "both chunks")
+		gitRun(t, repo, "push", "-q", "origin", "HEAD")
+		gitRun(t, repo, "reset", "-q", "--hard", "HEAD~1")
+
+		chunks := newestFirst(s...)
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			s[0].ID: upstream, s[1].ID: upstream,
+		})
+	})
+
+	t.Run("stack that no longer matches is pruned", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, stackVersions[:2]...)
+		writeRepoFile(t, repo, "file.txt", "uno\ndos\ntres\n")
+		commitAll(t, repo, "rewrite")
+
+		chunks := newestFirst(s...)
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			s[0].ID: noMatch, s[1].ID: noMatch,
+		})
+	})
+
+	t.Run("mismatched chunk in a stack is pruned, the rest kept", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, stackVersions[:2]...)
+		bad := Chunk{
+			ID:        "file.txt-bad",
+			FilePath:  "file.txt",
+			Diff:      "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-nope\n+still-nope\n",
+			StartTime: start.Add(500 * time.Millisecond), // between the two real chunks
+		}
+
+		chunks := []Chunk{s[1], bad, s[0]}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			s[0].ID: keep, bad.ID: noMatch, s[1].ID: keep,
+		})
+	})
+
+	t.Run("stacks on different files are independent", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase, "other.txt": stackBase})
+		f := recordStack(t, repo, "file.txt", start, stackVersions[:2]...)
+		// other.txt's chunks interleave in time with file.txt's.
+		o := recordStack(t, repo, "other.txt", start.Add(500*time.Millisecond), stackVersions...)
+		writeRepoFile(t, repo, "other.txt", stackVersions[0])
+		commitAll(t, repo, "other.txt first chunk")
+
+		chunks := []Chunk{o[2], f[1], o[1], f[0], o[0]}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			f[0].ID: keep, f[1].ID: keep,
+			o[0].ID: committed, o[1].ID: keep, o[2].ID: keep,
+		})
+	})
+}
+
+// checkTip fails unless StackTip finds path's tip and it holds want.
+func checkTip(t *testing.T, repo, path string, chunks []Chunk, want string) {
+	t.Helper()
+	tip, ok := StackTip(repo, path, chunks)
+	if !ok || !tip.Exists {
+		t.Fatalf("StackTip(%s) = %+v, ok=%v; want a tip holding %q", path, tip, ok, want)
+	}
+	if got := gitRun(t, repo, "cat-file", "-p", tip.Blob); got != want {
+		t.Fatalf("tip of %s = %q, want %q", path, got, want)
+	}
+}
+
+func TestStackTip(t *testing.T) {
+	start := time.Now()
+
+	t.Run("kept stack", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase, "other.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, stackVersions...)
+		o := recordStack(t, repo, "other.txt", start, stackVersions[0])
+		checkTip(t, repo, "file.txt", append(newestFirst(s...), o...), stackVersions[2])
+
+		// Neither the repository's index nor its working tree is touched.
+		if status := gitRun(t, repo, "status", "--porcelain"); status != "" {
+			t.Fatalf("repository changed:\n%s", status)
+		}
+	})
+
+	t.Run("committed bottom chunk is left out", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, stackVersions...)
+		writeRepoFile(t, repo, "file.txt", stackVersions[0])
+		commitAll(t, repo, "first chunk")
+		checkTip(t, repo, "file.txt", newestFirst(s...), stackVersions[2])
+	})
+
+	t.Run("landed stack has HEAD as its tip", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, stackVersions[:2]...)
+		writeRepoFile(t, repo, "file.txt", stackVersions[1])
+		commitAll(t, repo, "both chunks")
+		checkTip(t, repo, "file.txt", newestFirst(s...), stackVersions[1])
+	})
+
+	t.Run("deleting chunk leaves no file", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase, "keep.txt": "keep\n"})
+		os.Remove(filepath.Join(repo, "file.txt"))
+		del := Chunk{ID: "del", FilePath: "file.txt", Diff: gitRun(t, repo, "diff", "--", "file.txt"), StartTime: start}
+		gitRun(t, repo, "checkout", "--", "file.txt")
+
+		tip, ok := StackTip(repo, "file.txt", []Chunk{del})
+		if !ok || tip.Exists {
+			t.Fatalf("StackTip = %+v, ok=%v; want ok with no file", tip, ok)
+		}
+	})
+
+	t.Run("stale stack has no tip", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, stackVersions[:2]...)
+		writeRepoFile(t, repo, "file.txt", "uno\ndos\ntres\n")
+		commitAll(t, repo, "rewrite")
+
+		if tip, ok := StackTip(repo, "file.txt", newestFirst(s...)); ok {
+			t.Fatalf("StackTip = %+v, want no tip for a stale stack", tip)
+		}
+	})
+}
+
+var (
+	binaryKept   = Retention{DecisionKeep, "binary path still modified"}
+	binaryPruned = Retention{DecisionPrune, "binary path matches HEAD"}
+	onBinary     = Retention{DecisionKeep, "waits on an uncommitted binary change"}
+)
+
+const (
+	binaryBase = "\x00\x01binary\n"
+	asText     = "one\ntwo\n" // what the binary chunk turns data.bin into
+	textAbove  = "one\nTWO\n" // what the text chunk above it changes that to
+)
+
+// binaryChunk returns a chunk turning path from binary into its content on
+// disk, as the daemon records it: the hash is the blob of the file's latest
+// content.
+func binaryChunk(t *testing.T, repo, path string, at time.Time) Chunk {
+	t.Helper()
+	blob := strings.TrimSpace(gitRun(t, repo, "hash-object", "-w", "--", path))
+	return Chunk{
+		ID:        ChunkID(fmt.Sprintf("%s-bin-%d", path, at.UnixNano())),
+		FilePath:  path,
+		Diff:      fmt.Sprintf("Binary file %s has changed\n(Initial hash: 00000000, Latest hash: %s)", path, blob[:8]),
+		StartTime: at,
+		EndTime:   at.Add(time.Millisecond),
+		Hash:      ChunkHash(blob),
+	}
+}
+
+// recordOnBinary commits data.bin as a binary file, then records a binary
+// chunk that turns it into text and a text chunk diffed against that text.
+// The working tree is left with the text chunk's result, nothing staged.
+func recordOnBinary(t *testing.T, start time.Time) (repo string, bin, text Chunk) {
+	t.Helper()
+	repo = makeRepoWith(t, map[string]string{"data.bin": binaryBase})
+	writeRepoFile(t, repo, "data.bin", asText)
+	bin = binaryChunk(t, repo, "data.bin", start)
+	gitRun(t, repo, "add", "data.bin")
+	text = recordStack(t, repo, "data.bin", start.Add(time.Second), textAbove)[0]
+	writeRepoFile(t, repo, "data.bin", textAbove) // recordStack reset it
+	return repo, bin, text
+}
+
+func TestDecideRetentionAllTextChunkOnBinaryChunk(t *testing.T) {
+	start := time.Now()
+
+	t.Run("kept while the binary change is uncommitted", func(t *testing.T) {
+		repo, bin, text := recordOnBinary(t, start)
+		chunks := []Chunk{text, bin}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryKept, text.ID: onBinary,
+		})
+		checkTip(t, repo, "data.bin", chunks, textAbove)
+	})
+
+	t.Run("applicable once the binary change is committed", func(t *testing.T) {
+		repo, bin, text := recordOnBinary(t, start)
+		writeRepoFile(t, repo, "data.bin", asText)
+		commitAll(t, repo, "binary change")
+		writeRepoFile(t, repo, "data.bin", textAbove)
+
+		chunks := []Chunk{text, bin}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryKept, text.ID: keep,
+		})
+	})
+
+	t.Run("committed together prunes both", func(t *testing.T) {
+		repo, bin, text := recordOnBinary(t, start)
+		commitAll(t, repo, "both")
+
+		chunks := []Chunk{text, bin}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryPruned, text.ID: committed,
+		})
+	})
+
+	t.Run("reverted file prunes both", func(t *testing.T) {
+		repo, bin, text := recordOnBinary(t, start)
+		gitRun(t, repo, "checkout", "--", "data.bin")
+
+		chunks := []Chunk{text, bin}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryPruned, text.ID: noMatch,
+		})
+	})
+
+	t.Run("text chunks below the binary chunk are judged on HEAD", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		below := recordStack(t, repo, "file.txt", start, stackVersions[0])[0]
+		writeRepoFile(t, repo, "file.txt", binaryBase)
+		bin := binaryChunk(t, repo, "file.txt", start.Add(time.Second))
+
+		chunks := []Chunk{bin, below}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryKept, below.ID: keep,
+		})
+	})
+
+	t.Run("binary file deleted then recreated as text", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"data.bin": binaryBase})
+		bin := Chunk{
+			ID: "bin", FilePath: "data.bin", StartTime: start, Hash: "deleted-1",
+			Diff: "Binary file data.bin has changed\n(Initial hash: 00000000, Latest hash: 00000000)",
+		}
+		text := Chunk{
+			ID: "text", FilePath: "data.bin", StartTime: start.Add(time.Second),
+			Diff: "diff --git a/data.bin b/data.bin\nnew file mode 100644\n--- /dev/null\n+++ b/data.bin\n@@ -0,0 +1 @@\n+one\n",
+		}
+		writeRepoFile(t, repo, "data.bin", "one\n")
+
+		chunks := []Chunk{text, bin}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryKept, text.ID: onBinary,
+		})
+		checkTip(t, repo, "data.bin", chunks, "one\n")
+	})
+
+	t.Run("unknown binary content keeps the chunks above while the path is modified", func(t *testing.T) {
+		repo, bin, text := recordOnBinary(t, start)
+		bin.Hash = "gone"
+
+		chunks := []Chunk{text, bin}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryKept, text.ID: onBinary,
+		})
+		if tip, ok := StackTip(repo, "data.bin", chunks); ok {
+			t.Fatalf("StackTip = %+v, want no tip on top of unknown binary content", tip)
+		}
+
+		gitRun(t, repo, "checkout", "--", "data.bin")
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryPruned, text.ID: noMatch,
+		})
 	})
 }

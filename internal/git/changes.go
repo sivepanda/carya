@@ -10,7 +10,9 @@ import (
 )
 
 // TrackConfigChange runs an action and reports whether configPath changed,
-// plus the files changed between the pre/post action HEAD commits.
+// plus the files changed between the pre/post action HEAD commits. The file
+// list is empty (non-nil) when HEAD did not move, and nil when it could not be
+// determined.
 func TrackConfigChange(configPath string, action func(repoPath string) error) (bool, []string, error) {
 	repoPath, err := os.Getwd()
 	if err != nil {
@@ -39,9 +41,12 @@ func TrackConfigChange(configPath string, action func(repoPath string) error) (b
 	afterHash, _ := fileHash(relPath)
 	configChanged := beforeHash != "" && afterHash != "" && beforeHash != afterHash
 
+	// nil tells Mycelia the changes are unknown, so it runs every command. An
+	// empty list would mean "nothing changed" and skip trigger-gated commands.
 	changedFiles, err := changedFilesSince(beforeCommit)
 	if err != nil {
-		changedFiles = []string{}
+		log.Printf("Could not list changed files, running all commands: %v", err)
+		changedFiles = nil
 	}
 
 	return configChanged, changedFiles, nil
