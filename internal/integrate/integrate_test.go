@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"carya/internal/git"
 
@@ -203,5 +204,29 @@ func TestDetectChecks(t *testing.T) {
 	}
 	if len(DetectChecks(t.TempDir())) != 0 {
 		t.Fatal("an empty repo has nothing to run")
+	}
+}
+
+func TestSinceLeavesOutStaleStates(t *testing.T) {
+	repo := setupRepo(t)
+	// Back-date bob's state by rewriting it with an old committer date.
+	tree := gitRun(t, repo, "rev-parse", git.UserTreeRefPath("bob")+"^{tree}")
+	base := gitRun(t, repo, "rev-parse", git.UserTreeRefPath("bob")+"^")
+	cmd := exec.Command("git", "commit-tree", tree, "-p", base, "-m", "old state")
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=c", "GIT_AUTHOR_EMAIL=c@i", "GIT_COMMITTER_NAME=c", "GIT_COMMITTER_EMAIL=c@i",
+		"GIT_COMMITTER_DATE=2000-01-01T00:00:00Z", "GIT_AUTHOR_DATE=2000-01-01T00:00:00Z")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "update-ref", git.UserTreeRefPath("bob"), strings.TrimSpace(string(out)))
+
+	res, err := Merge(repo, Options{Since: 24 * time.Hour, Exclude: []string{"carol"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names(res.Merged) != "alice" || len(res.Skipped) != 1 || !strings.Contains(res.Skipped[0].Reason, "older than --since") {
+		t.Fatalf("bob's stale state should be left out: merged=%s skipped=%+v", names(res.Merged), res.Skipped)
 	}
 }

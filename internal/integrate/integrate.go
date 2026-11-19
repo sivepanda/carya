@@ -22,6 +22,7 @@ type Options struct {
 	Onto    string        // ref to integrate onto; empty means the default branch
 	Only    []string      // user IDs to include; empty means everyone
 	Exclude []string      // user IDs to leave out
+	Since   time.Duration // leave out states published longer ago than this; zero keeps all
 	Run     []string      // build and test commands; empty means detect them
 	Setup   bool          // run the repository's Mycelia post-checkout setup first
 	Keep    bool          // keep the worktree afterwards
@@ -123,7 +124,13 @@ func Merge(repoRoot string, opts Options) (*Result, error) {
 			res.Skipped = append(res.Skipped, Skipped{st.UserID, "published by an older carya without a base; republish it"})
 			continue
 		}
-		candidates = append(candidates, candidate{st, commitTime(repoRoot, st.Commit)})
+		published := commitTime(repoRoot, st.Commit)
+		if opts.Since > 0 && !published.IsZero() && time.Since(published) > opts.Since {
+			age := time.Since(published).Round(time.Minute)
+			res.Skipped = append(res.Skipped, Skipped{st.UserID, fmt.Sprintf("published %s ago, older than --since", age)})
+			continue
+		}
+		candidates = append(candidates, candidate{st, published})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if !candidates[i].published.Equal(candidates[j].published) {

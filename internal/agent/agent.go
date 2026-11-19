@@ -172,6 +172,15 @@ func (s *Session) ClaimSync(interval time.Duration) bool {
 	return os.WriteFile(stamp, []byte(time.Now().Format(time.RFC3339)+"\n"), 0644) == nil
 }
 
+// FetchStates fetches everyone's published states from origin without
+// pushing anything.
+func (s *Session) FetchStates() error {
+	if ok, why := s.Sharing(); !ok {
+		return fmt.Errorf("not sharing state: %s", why)
+	}
+	return git.NewRefManager(s.Repo.RootPath()).FetchCaryaRefs("origin")
+}
+
 // Sync pushes this agent's state and fetches everyone else's.
 func (s *Session) Sync() error {
 	if ok, why := s.Sharing(); !ok {
