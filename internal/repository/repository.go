@@ -102,7 +102,17 @@ func (r *Repository) UserIDPath() string {
 // file: if nothing ignores it yet, it is added to the repository's
 // info/exclude, which every worktree of the repository shares.
 func (r *Repository) EnsureLocallyIgnored() error {
-	check := exec.Command("git", "check-ignore", "-q", "--no-index", ".carya/user-id")
+	return r.EnsureLocallyExcluded(".carya/")
+}
+
+// EnsureLocallyExcluded adds pattern (a path, or a directory ending in "/")
+// to the repository's info/exclude unless git already ignores it.
+func (r *Repository) EnsureLocallyExcluded(pattern string) error {
+	probe := pattern
+	if strings.HasSuffix(probe, "/") {
+		probe += "probe"
+	}
+	check := exec.Command("git", "check-ignore", "-q", "--no-index", "--", probe)
 	check.Dir = r.rootPath
 	if check.Run() == nil {
 		return nil
@@ -124,7 +134,7 @@ func (r *Repository) EnsureLocallyIgnored() error {
 	}
 
 	existing, _ := os.ReadFile(excludePath)
-	entry := ".carya/\n"
+	entry := pattern + "\n"
 	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
 		entry = "\n" + entry
 	}
