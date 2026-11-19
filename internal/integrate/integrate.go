@@ -96,7 +96,7 @@ func Merge(repoRoot string, opts Options) (*Result, error) {
 
 	res := &Result{Onto: opts.Onto, Merged: []Merged{}, Conflicts: []Conflict{}, Skipped: []Skipped{}, Steps: []Step{}}
 	if res.Onto == "" {
-		res.Onto = refs.DefaultBranch()
+		res.Onto = refs.IntegrationBranch()
 	}
 	onto, err := refs.ResolveRef(res.Onto + "^{commit}")
 	if err != nil {

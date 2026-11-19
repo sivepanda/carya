@@ -217,3 +217,37 @@ func TestWorktreesInheritTeamSettings(t *testing.T) {
 		t.Fatal("defaults share through origin")
 	}
 }
+
+// An agent that commits its work, as `carya commit` encourages, must stay
+// visible to its peers until the work is merged.
+func TestCommittedWorkStaysVisibleToPeers(t *testing.T) {
+	isolate(t)
+	repo := newRepo(t)
+	other := filepath.Join(t.TempDir(), "other")
+	gitRun(t, repo, "worktree", "add", "-q", "-b", "agent-b", other)
+
+	a, err := Bootstrap(repo, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Bootstrap(other, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "shared.txt"), []byte("from b\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, other, "add", "shared.txt")
+	gitRun(t, other, "-c", "user.name=B", "-c", "user.email=b@e", "commit", "-q", "-m", "b's change")
+	if _, err := b.Snapshot(); err != nil {
+		t.Fatal(err)
+	}
+
+	changes, err := a.Check([]string{"shared.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || changes[0].UserID != b.UserID {
+		t.Fatalf("b's committed but unmerged change should be visible: %+v", changes)
+	}
+}

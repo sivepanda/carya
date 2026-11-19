@@ -34,7 +34,7 @@ or both) and whether its work has already landed on the default branch.`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		root, me := statesContext()
-		all, err := states.List(root, me, git.NewRefManager(root).DefaultBranch())
+		all, err := states.List(root, me, git.NewRefManager(root).IntegrationBranch())
 		if err != nil {
 			fail(err)
 		}
@@ -75,7 +75,7 @@ from origin. A state still on origin comes back on the next fetch, so
 		root, me := statesContext()
 		onto := pruneAssumeOnto
 		if onto == "" {
-			onto = git.NewRefManager(root).DefaultBranch()
+			onto = git.NewRefManager(root).IntegrationBranch()
 		}
 		all, err := states.List(root, me, onto)
 		if err != nil {
@@ -187,7 +187,7 @@ func init() {
 	p.StringSliceVar(&pruneUsers, "user", nil, "prune exactly these states instead")
 	p.BoolVar(&pruneRemote, "remote", false, "also delete the states on origin, for everyone")
 	p.BoolVar(&pruneDryRun, "dry-run", false, "show what would be pruned without deleting anything")
-	p.StringVar(&pruneAssumeOnto, "onto", "", "branch to check for landed work (default: the default branch)")
+	p.StringVar(&pruneAssumeOnto, "onto", "", "branch to check for landed work (default: the integration branch)")
 	statesCmd.AddCommand(statesPruneCmd)
 	rootCmd.AddCommand(statesCmd)
 }

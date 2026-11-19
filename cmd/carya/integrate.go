@@ -170,7 +170,7 @@ func printIntegration(res *integrate.Result, root string, mergeOnly bool) {
 
 func init() {
 	f := integrateCmd.Flags()
-	f.StringVar(&integrateOnto, "onto", "", "ref to integrate onto (default: the default branch)")
+	f.StringVar(&integrateOnto, "onto", "", "ref to integrate onto (default: the integration branch)")
 	f.StringSliceVar(&integrateOnly, "only", nil, "include only these users' states")
 	f.StringSliceVar(&integrateExclude, "exclude", nil, "leave these users' states out")
 	f.DurationVar(&integrateSince, "since", 0, "leave out states published longer ago than this, e.g. 24h (default: keep all)")

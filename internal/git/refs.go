@@ -49,14 +49,16 @@ func NewRefManager(repoPath string) *RefManager {
 	}
 }
 
-// PublishUserState records treeHash as userID's working state, built on the
-// repository's current HEAD, at refs/carya/users/<userID>/tree. Publishing
+// PublishUserState records treeHash as userID's working state, at
+// refs/carya/users/<userID>/tree, on the fork point StateBase returns, so
+// everything not yet in the integration branch (committed or not) counts as
+// the state's change. Publishing
 // the same tree on the same base again leaves the ref untouched, so repeated
 // publishes do not churn commits or pushes.
 func (r *RefManager) PublishUserState(userID, treeHash string) (UserRef, error) {
 	refPath := UserTreeRefPath(userID)
 
-	base, err := r.headCommit()
+	base, err := r.StateBase()
 	if err != nil {
 		return UserRef{}, err
 	}
@@ -115,6 +117,70 @@ func (r *RefManager) UpdateRef(ref, commit string) error {
 		return fmt.Errorf("update-ref %s: %w\n%s", ref, err, out)
 	}
 	return nil
+}
+
+// StateBase returns the commit a working state is measured from: where HEAD
+// forked off the integration branch. An agent's commits that are not merged
+// yet stay part of its unfinished work, so peers keep seeing them. It is
+// HEAD itself when HEAD is on (or behind) the integration branch, or when
+// there is none, and "" on an unborn branch.
+func (r *RefManager) StateBase() (string, error) {
+	head, err := r.headCommit()
+	if err != nil || head == "" {
+		return head, err
+	}
+	cmd := exec.Command("git", "merge-base", head, r.IntegrationBranch())
+	cmd.Dir = r.repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		return head, nil
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// IntegrationBranch returns the branch agents' work is merged into: the
+// repository's `carya.base` setting, else (in a linked worktree) the branch
+// checked out in the main checkout, which agent worktrees fork from, else the
+// default branch.
+func (r *RefManager) IntegrationBranch() string {
+	if b := r.config("carya.base"); b != "" {
+		return b
+	}
+	if b := r.mainWorktreeBranch(); b != "" {
+		return b
+	}
+	return r.DefaultBranch()
+}
+
+func (r *RefManager) config(key string) string {
+	cmd := exec.Command("git", "config", "--get", key)
+	cmd.Dir = r.repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// mainWorktreeBranch returns the branch checked out in the main checkout
+// when this is a linked worktree, or "".
+func (r *RefManager) mainWorktreeBranch() string {
+	dirs := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir")
+	dirs.Dir = r.repoPath
+	out, err := dirs.Output()
+	if err != nil {
+		return ""
+	}
+	parts := strings.Fields(string(out))
+	if len(parts) != 2 || parts[0] == parts[1] {
+		return "" // not a linked worktree
+	}
+	cmd := exec.Command("git", "--git-dir="+parts[1], "symbolic-ref", "--quiet", "--short", "HEAD")
+	b, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // DefaultBranch returns the ref that work is integrated into: the remote's

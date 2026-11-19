@@ -216,3 +216,54 @@ func conflictedPaths(r *ConflictReport) map[string]bool {
 	}
 	return paths
 }
+
+func TestStateBaseIsTheForkPoint(t *testing.T) {
+	repo := createMainRepo(t)
+	runGit(t, repo, "branch", "-M", "main")
+	fork := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	runGit(t, repo, "checkout", "-q", "-b", "feature")
+	commitFiles(t, repo, map[string]string{"feature.txt": "f\n"}, "feature work")
+	refs := NewRefManager(repo)
+
+	// main is the integration branch: the branch's own commit is a change.
+	tree := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD^{tree}"))
+	state, err := refs.PublishUserState("me", tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.BaseCommit != fork {
+		t.Fatalf("base = %s, want the fork point %s", state.BaseCommit, fork)
+	}
+	diffs, err := NewConflictPredictor(repo).DiffTrees(state.BaseCommit, state.TreeHash)
+	if err != nil || len(diffs) != 1 || diffs[0].Path != "feature.txt" {
+		t.Fatalf("committed work should count as the state's change: %+v %v", diffs, err)
+	}
+
+	// Integrating into feature itself: nothing on it is unfinished.
+	runGit(t, repo, "config", "carya.base", "feature")
+	if base, _ := refs.StateBase(); base != strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")) {
+		t.Fatalf("on the integration branch the base is HEAD, got %s", base)
+	}
+}
+
+// Agent worktrees fork from whatever the main checkout has out, not from the
+// default branch, so that is what they are measured against.
+func TestWorktreesMeasureFromTheMainCheckoutsBranch(t *testing.T) {
+	repo := createMainRepo(t)
+	runGit(t, repo, "branch", "-M", "main")
+	runGit(t, repo, "checkout", "-q", "-b", "work")
+	commitFiles(t, repo, map[string]string{"work.txt": "w\n"}, "work on the branch")
+	workTip := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+
+	wt := filepath.Join(t.TempDir(), "agent")
+	runGit(t, repo, "worktree", "add", "-q", "-b", "agent-branch", wt)
+	commitFiles(t, wt, map[string]string{"agent.txt": "a\n"}, "agent commit")
+
+	base, err := NewRefManager(wt).StateBase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base != workTip {
+		t.Fatalf("worktree base = %s, want the fork from work %s", base, workTip)
+	}
+}
