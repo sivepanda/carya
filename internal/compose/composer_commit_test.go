@@ -1,9 +1,11 @@
 package compose
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -145,5 +147,84 @@ func TestCreateCommitRefusesDuringOperation(t *testing.T) {
 				t.Errorf("HEAD moved:\n%s", gitRun(t, repo, "log", "-1", "--format=%an %s%n%P", "HEAD"))
 			}
 		})
+	}
+}
+
+// lines returns a file of n numbered lines, with the lines in change
+// replaced.
+func lines(n int, change map[int]string) string {
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		if c, ok := change[i]; ok {
+			b.WriteString(c + "\n")
+			continue
+		}
+		fmt.Fprintf(&b, "line %d\n", i)
+	}
+	return b.String()
+}
+
+// A path the user has staged changes to keeps them in the index, with the
+// committed change merged in, so their next `git commit` does not undo it.
+func TestCreateCommitKeepsStagedChangeOfTheSameFile(t *testing.T) {
+	t.Run("other change staged", func(t *testing.T) {
+		repo := baseRepo(t, map[string]string{"f.txt": lines(30, nil)})
+		writeFile(t, repo, "f.txt", lines(30, map[int]string{3: "staged 3"}))
+		gitRun(t, repo, "add", "f.txt")
+		writeFile(t, repo, "f.txt", lines(30, map[int]string{27: "agent 27"}))
+		c := chunkOf(t, repo, "f.txt")
+		writeFile(t, repo, "f.txt", lines(30, map[int]string{3: "staged 3", 27: "agent 27"}))
+
+		composeAll(t, repo, "agent change", c)
+		if got, want := gitRun(t, repo, "show", "HEAD:f.txt"), lines(30, map[int]string{27: "agent 27"}); got != want {
+			t.Errorf("f.txt in HEAD:\n%s\nwant:\n%s", got, want)
+		}
+		want := lines(30, map[int]string{3: "staged 3", 27: "agent 27"})
+		if got := gitRun(t, repo, "show", ":f.txt"); got != want {
+			t.Errorf("f.txt in the index:\n%s\nwant:\n%s", got, want)
+		}
+		gitRun(t, repo, "commit", "-q", "-m", "user's commit")
+		if got := gitRun(t, repo, "show", "HEAD:f.txt"); got != want {
+			t.Errorf("f.txt after the user's commit:\n%s\nwant:\n%s", got, want)
+		}
+	})
+	t.Run("whole file staged", func(t *testing.T) {
+		repo := baseRepo(t, map[string]string{"f.txt": lines(30, nil)})
+		writeFile(t, repo, "f.txt", lines(30, map[int]string{27: "agent 27"}))
+		c := chunkOf(t, repo, "f.txt")
+		work := lines(30, map[int]string{3: "staged 3", 27: "agent 27"})
+		writeFile(t, repo, "f.txt", work)
+		gitRun(t, repo, "add", "f.txt")
+
+		composeAll(t, repo, "agent change", c)
+		if got := gitRun(t, repo, "show", ":f.txt"); got != work {
+			t.Errorf("f.txt in the index:\n%s\nwant:\n%s", got, work)
+		}
+		if s := gitRun(t, repo, "status", "--porcelain"); s != "M  f.txt\n" {
+			t.Errorf("status:\n%s", s)
+		}
+	})
+}
+
+// A file named like a glob must not be treated as a pathspec that also
+// matches the user's staged files.
+func TestCreateCommitPathThatLooksLikeAGlob(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not allow * in file names")
+	}
+	repo := baseRepo(t, map[string]string{"a.txt": "a\n", "*.txt": "star\n"})
+	writeFile(t, repo, "a.txt", "a staged\n")
+	gitRun(t, repo, "add", "a.txt")
+	writeFile(t, repo, "*.txt", "star changed\n")
+
+	composeAll(t, repo, "star", chunkOf(t, repo, "*.txt"))
+	if got := gitRun(t, repo, "show", "HEAD:*.txt"); got != "star changed\n" {
+		t.Errorf("*.txt in HEAD = %q", got)
+	}
+	if got := gitRun(t, repo, "diff", "--cached", "--name-only"); got != "a.txt\n" {
+		t.Errorf("staged after commit: %q, want only a.txt", got)
+	}
+	if got := gitRun(t, repo, "diff", "--name-only"); got != "" {
+		t.Errorf("unstaged after commit: %q", got)
 	}
 }
