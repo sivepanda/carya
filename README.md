@@ -31,3 +31,6 @@ Use `carya publish` to share your state, `carya team` to see teammates, and `car
 ## Planned Components
 ### Synchronous Development & Environment Sharing
 Creates a shell of a host user's environment and recreates it on the client, while also streaming files between users, enabling a faster, more localized synchronous development pathway.
+
+## License
+Carya is free software, licensed under the [GNU General Public License v3.0](LICENSE) (`GPL-3.0-only`).

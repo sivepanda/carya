@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -9,12 +10,30 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+)
+
+// ErrAlreadyRunning is returned when another daemon already serves the repository.
+var ErrAlreadyRunning = errors.New("daemon is already running")
+
+// AlreadyRunningExitCode is the exit status of a daemon process that found the
+// daemon lock held by another daemon, so Start can tell that apart from a crash.
+const AlreadyRunningExitCode = 3
+
+const (
+	// startupConfirmTimeout bounds how long Start waits for the new daemon
+	// to record its PID before assuming it is still starting up.
+	startupConfirmTimeout = 5 * time.Second
+	// stopTimeout bounds how long Stop waits for the daemon to exit; on
+	// SIGTERM it flushes chunks and may push to the remote first.
+	stopTimeout = 30 * time.Second
 )
 
 // Daemon manages a background process with PID file
 type Daemon struct {
-	pidFile string
-	logFile string
+	pidFile  string
+	logFile  string
+	lockFile string
 }
 
 type pidRecord struct {
@@ -25,8 +44,9 @@ type pidRecord struct {
 // New creates a new daemon manager
 func New(pidFile, logFile string) *Daemon {
 	return &Daemon{
-		pidFile: pidFile,
-		logFile: logFile,
+		pidFile:  pidFile,
+		logFile:  logFile,
+		lockFile: filepath.Join(filepath.Dir(pidFile), "daemon.lock"),
 	}
 }
 
@@ -84,11 +104,24 @@ func (d *Daemon) RemovePID() error {
 	return os.Remove(d.pidFile)
 }
 
-// Start starts the daemon in background mode
+// RemoveOwnPID removes the PID file only if it still names the current
+// process, so an exiting daemon can't delete the record of its successor.
+func (d *Daemon) RemoveOwnPID() {
+	d.removePIDIf(os.Getpid())
+}
+
+func (d *Daemon) removePIDIf(pid int) {
+	if record, err := d.readPIDRecord(); err == nil && record.PID == pid {
+		_ = d.RemovePID()
+	}
+}
+
+// Start starts the daemon in background mode. It returns ErrAlreadyRunning
+// when another daemon (possibly one started concurrently) holds the lock.
 func (d *Daemon) Start(args []string) error {
 	if d.IsRunning() {
 		log.Printf("Daemon is already running")
-		return fmt.Errorf("daemon is already running")
+		return ErrAlreadyRunning
 	}
 
 	// Ensure directory exists
@@ -114,11 +147,45 @@ func (d *Daemon) Start(args []string) error {
 
 	// Start the process in background
 	cmd := exec.Command(executable, args...)
-
-	return startProcess(cmd, logFile)
+	if err := startProcess(cmd, logFile); err != nil {
+		return err
+	}
+	return d.confirmStarted(cmd)
 }
 
-// Stop stops the running daemon
+// confirmStarted waits until the new daemon records its PID (it does so only
+// after taking the daemon lock) or exits. A daemon that lost the lock to a
+// concurrently started one exits with AlreadyRunningExitCode.
+func (d *Daemon) confirmStarted(cmd *exec.Cmd) error {
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
+	deadline := time.NewTimer(startupConfirmTimeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		select {
+		case err := <-exited:
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) && exitErr.ExitCode() == AlreadyRunningExitCode {
+				return ErrAlreadyRunning
+			}
+			return fmt.Errorf("daemon exited during startup; see %s", d.logFile)
+		case <-tick.C:
+			if record, err := d.readPIDRecord(); err == nil && record.PID == cmd.Process.Pid {
+				return nil
+			}
+		case <-deadline.C:
+			// Still alive but slow to start; it has not failed.
+			return nil
+		}
+	}
+}
+
+// Stop signals the running daemon to shut down and waits for it to exit, so
+// callers can rely on it no longer touching the repository.
 func (d *Daemon) Stop() error {
 	record, err := d.readPIDRecord()
 	if err != nil {
@@ -133,12 +200,17 @@ func (d *Daemon) Stop() error {
 		return err
 	}
 
-	// Remove PID file
-	if err := d.RemovePID(); err != nil {
-		log.Printf("Failed to remove PID file: %v", err)
-		return fmt.Errorf("failed to remove PID file: %w", err)
+	deadline := time.Now().Add(stopTimeout)
+	for isProcessRunning(record.PID) && processMatches(record.PID, record.Executable) {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("daemon (PID %d) is still shutting down after %s", record.PID, stopTimeout)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
+	// The daemon removes its own PID file on a clean exit; this covers the
+	// case where it could not.
+	d.removePIDIf(record.PID)
 	return nil
 }
 

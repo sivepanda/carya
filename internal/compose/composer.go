@@ -4,6 +4,7 @@ import (
 	"carya/internal/chunk"
 	"carya/internal/patch"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 )
@@ -18,6 +19,7 @@ type ChunkStore interface {
 	GetRecentChunks(limit int) ([]chunk.Chunk, error)
 	UpdateChunkFeatureLabel(ids []chunk.ChunkID, label string) error
 	ClearChunkFeatureLabel(ids []chunk.ChunkID) error
+	DeleteChunks(ids []chunk.ChunkID) error
 }
 
 type Composer struct {
@@ -255,7 +257,33 @@ func (c *Composer) CreateCommit(commitMsg string) (CommitResult, error) {
 }
 
 func (c *Composer) ApplyPatchAndCommit(patchText, commitMsg string) (string, error) {
-	return patch.ApplyAndCommit(c.repoPath, patchText, commitMsg)
+	output, err := patch.ApplyAndCommit(c.repoPath, patchText, commitMsg)
+	if err != nil {
+		return output, err
+	}
+	c.pruneCommittedChunks()
+	return output, nil
+}
+
+// pruneCommittedChunks deletes the selected chunks that the new commit now
+// contains. Otherwise they keep showing up in compose until the next
+// (rate-limited) chunk sync, and selecting one again fails to apply.
+// Selected chunks that were skipped are left alone.
+func (c *Composer) pruneCommittedChunks() {
+	var ids []chunk.ChunkID
+	for i, ch := range c.chunks {
+		if c.selected[i] && chunk.AppliedAtHEAD(c.repoPath, ch) {
+			ids = append(ids, ch.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	if err := c.store.DeleteChunks(ids); err != nil {
+		log.Printf("Commit created, but pruning its chunks failed: %v", err)
+		return
+	}
+	log.Printf("Pruned %d committed chunk(s)", len(ids))
 }
 
 func (c *Composer) ApplyApplicableCommit(applicable map[int]bool, commitMsg string) (string, error) {

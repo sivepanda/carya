@@ -41,6 +41,7 @@ type ChunkStore interface {
 	FindChunks(filePath string) ([]chunk.Chunk, error)
 	UpdateChunkFeatureLabel(ids []chunk.ChunkID, label string) error
 	ClearChunkFeatureLabel(ids []chunk.ChunkID) error
+	DeleteChunks(ids []chunk.ChunkID) error
 }
 
 type composerRow struct {

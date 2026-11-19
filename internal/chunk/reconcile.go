@@ -47,6 +47,19 @@ func DecideRetention(repoPath string, c Chunk) (ReconcileDecision, string) {
 	return DecisionPrune, "no longer matches"
 }
 
+// AppliedAtHEAD reports whether HEAD already contains the chunk's change.
+func AppliedAtHEAD(repoPath string, c Chunk) bool {
+	patch := strings.TrimSpace(c.Diff)
+	if patch == "" {
+		return false
+	}
+	if strings.HasPrefix(patch, "Binary file ") {
+		modified, err := isPathModified(repoPath, c.FilePath)
+		return err == nil && !modified
+	}
+	return appliesReverseToRef(repoPath, c.Diff, "HEAD")
+}
+
 func appliesForward(repoPath, patch string) bool {
 	return appliesToRef(repoPath, patch, "HEAD", false)
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -19,6 +20,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// daemonLock holds the daemon's lock file open for the life of the process.
+// Keeping it in a package variable stops the *os.File from being garbage
+// collected, which would close the descriptor and release the lock.
+var daemonLock *os.File
+
 type DaemonStatus struct {
 	FlushInterval string `json:"flush_interval"`
 	IsIdle        bool   `json:"is_idle"`
@@ -32,11 +38,27 @@ var daemonCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		repo := mustInitializedRepo()
 
+		// While jumped into a teammate's state the working tree is theirs;
+		// tracking it would record and publish their work as ours.
+		if jumpInProgress(repo.CaryaPath()) {
+			log.Println("Not starting daemon: a jump is in progress (run 'carya jump leave' first)")
+			os.Exit(1)
+		}
+
 		d := daemon.New(repo.PIDPath(), repo.LogPath())
+		lock, err := d.AcquireLock(2 * time.Second)
+		if errors.Is(err, daemon.ErrAlreadyRunning) {
+			log.Println("Another Carya daemon is already running for this repository; exiting")
+			os.Exit(daemon.AlreadyRunningExitCode)
+		} else if err != nil {
+			log.Fatalf("Failed to acquire daemon lock: %v", err)
+		}
+		daemonLock = lock
+
 		if err := d.WritePID(); err != nil {
 			log.Fatalf("Failed to write PID file: %v", err)
 		}
-		defer d.RemovePID()
+		defer d.RemoveOwnPID()
 
 		log.Println("Starting Carya daemon...")
 
@@ -69,6 +91,14 @@ var daemonCmd = &cobra.Command{
 			log.Fatalf("Failed to start engine: %v", err)
 		}
 		defer engineFeature.Stop()
+
+		// The shadow index starts from HEAD; fold in uncommitted changes made
+		// before this daemon started so the published state matches disk.
+		w := watcherFeature.Watcher()
+		w.LoadRules(repo.RootPath())
+		if err := engineFeature.Engine().ReconcileWorkingTree(repo.RootPath(), w.ShouldTrackRel); err != nil {
+			log.Printf("Warning: could not reconcile working tree changes: %v", err)
+		}
 
 		if err := watcherFeature.Start(); err != nil {
 			log.Fatalf("Failed to start watcher: %v", err)
@@ -176,6 +206,11 @@ var startCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		repo := mustInitializedRepo()
 
+		if jumpInProgress(repo.CaryaPath()) {
+			fmt.Fprintln(os.Stderr, "Error: a jump is in progress. Run 'carya jump leave' first; the daemon restarts automatically if it was running.")
+			os.Exit(1)
+		}
+
 		d := daemon.New(repo.PIDPath(), repo.LogPath())
 
 		if d.IsRunning() {
@@ -183,7 +218,10 @@ var startCmd = &cobra.Command{
 			os.Exit(0)
 		}
 
-		if err := d.Start([]string{"daemon"}); err != nil {
+		if err := d.Start([]string{"daemon"}); errors.Is(err, daemon.ErrAlreadyRunning) {
+			fmt.Println("Carya daemon is already running")
+			os.Exit(0)
+		} else if err != nil {
 			fmt.Fprintf(os.Stderr, "Error starting daemon: %v\n", err)
 			os.Exit(1)
 		}

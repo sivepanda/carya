@@ -31,7 +31,7 @@ nfpms:
     homepage: https://github.com/sivepanda/carya
     maintainer: sivepanda
     description: Reimagining what's possible with version control software. Feature-based commits, housekeeping automation, and enhanced Git workflows.
-    license: MIT
+    license: GPL-3.0-only
     formats:
       - deb      # Debian/Ubuntu
       - rpm      # RHEL/Fedora/CentOS
@@ -40,6 +40,8 @@ nfpms:
     contents:
       - src: ./README.md
         dst: /usr/share/doc/carya/README.md
+      - src: ./LICENSE
+        dst: /usr/share/licenses/carya/LICENSE
 
 # Homebrew tap for macOS
 brews:
@@ -49,7 +51,7 @@ brews:
     name: carya
     homepage: https://github.com/sivepanda/carya
     description: Reimagining what's possible with version control software
-    license: MIT
+    license: GPL-3.0-only
     skip_upload: auto
 
 checksum:
