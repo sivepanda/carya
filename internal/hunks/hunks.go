@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -318,6 +319,9 @@ func atLine(all []Hunk, byDigest map[string][]int, ref string) (int, bool) {
 
 // Patch joins hunks into one patch that applies to HEAD.
 func Patch(hunks []Hunk) string {
+	// git apply wants each file's hunks together and in order.
+	hunks = append([]Hunk(nil), hunks...)
+	sort.SliceStable(hunks, func(i, j int) bool { return hunks[i].order < hunks[j].order })
 	var b strings.Builder
 	lastHeader := ""
 	for _, h := range hunks {

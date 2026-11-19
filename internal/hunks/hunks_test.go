@@ -260,6 +260,10 @@ func TestListSeveralHunksInOneFile(t *testing.T) {
 	if got, want := Patch(hs), r.git("diff", "--full-index", "HEAD"); got != want {
 		t.Errorf("Patch(all) differs from git diff:\n%s\nwant:\n%s", got, want)
 	}
+	// Patch puts hunks back in file order whatever order it gets them in.
+	if got := Patch([]Hunk{hs[2], hs[0], hs[1]}); got != Patch(hs) {
+		t.Errorf("Patch of reordered hunks:\n%s", got)
+	}
 }
 
 func TestListUntrackedFile(t *testing.T) {
