@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -361,6 +362,62 @@ func TestListAndCommitModeChange(t *testing.T) {
 	}
 	if s := r.status(); s != "" {
 		t.Errorf("status after commit:\n%s", s)
+	}
+}
+
+func TestListAndCommitUnusualPaths(t *testing.T) {
+	skipOnWindows(t)
+	r := newRepo(t)
+	tracked := []string{
+		"with space.txt",
+		"dir b/sub b/file.txt", // " b/" inside the path itself
+		`quote"and\backslash.txt`,
+		"ünïcødé ✓.txt",
+	}
+	untracked := []string{
+		"new ünïcødé.txt",
+		"tab\tand\nnewline.txt",
+		`"quoted".txt`,
+		"latin-1 caf\xe9.txt",   // not UTF-8
+		"latin-1 \xe9\ttab.txt", // not UTF-8, and quoted
+	}
+	for _, name := range tracked {
+		r.write(name, "old\n")
+	}
+	r.commitAll("base")
+	for _, name := range tracked {
+		r.write(name, "new\n")
+	}
+	for _, name := range untracked {
+		r.write(name, "fresh\n")
+	}
+
+	hs := r.list()
+	var got []string
+	for _, h := range hs {
+		got = append(got, h.Path)
+	}
+	want := append(append([]string(nil), tracked...), untracked...)
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("paths:\n got %q\nwant %q", got, want)
+	}
+	for _, name := range want {
+		sel, err := Select(hs, []string{name})
+		if err != nil || len(sel) != 1 || sel[0].Path != name {
+			t.Errorf("Select(%q) = %+v, %v", name, sel, err)
+		}
+	}
+
+	r.commit("unusual names", want...)
+	if s := r.git("status", "--porcelain", "-z"); s != "" {
+		t.Errorf("status after commit: %q", s)
+	}
+	for _, name := range tracked {
+		if got := r.blob("HEAD", name); got != "new\n" {
+			t.Errorf("%q in HEAD = %q", name, got)
+		}
 	}
 }
 

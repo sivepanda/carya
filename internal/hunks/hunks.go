@@ -50,22 +50,23 @@ func List(repoRoot string) ([]Hunk, error) {
 	if err != nil {
 		return nil, fmt.Errorf("diff working tree: %w", err)
 	}
-	return parse(diff), nil
+	return parse(diff)
 }
 
-var diffHeader = regexp.MustCompile(`^diff --git a/(.*) b/(.*)$`)
 var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@`)
 
-func parse(diff string) []Hunk {
+func parse(diff string) ([]Hunk, error) {
 	var out []Hunk
 	lines := strings.SplitAfter(diff, "\n")
 	for i := 0; i < len(lines); {
-		m := diffHeader.FindStringSubmatch(strings.TrimRight(lines[i], "\n"))
-		if m == nil {
+		if !strings.HasPrefix(lines[i], "diff --git ") {
 			i++
 			continue
 		}
-		path := m[2]
+		path, err := diffPath(strings.TrimSuffix(lines[i], "\n"))
+		if err != nil {
+			return nil, err
+		}
 		j := i + 1
 		for j < len(lines) && !strings.HasPrefix(lines[j], "diff --git ") {
 			j++
@@ -74,7 +75,64 @@ func parse(diff string) []Hunk {
 		i = j
 	}
 	assignIDs(out)
-	return out
+	return out, nil
+}
+
+// diffPath reads the path from a "diff --git a/<path> b/<path>" line. Without
+// renames both names are the same path, which is how a path that itself has
+// " b/" in it is read correctly. Git quotes a path C-style when it has a
+// double quote, backslash or control character in it.
+func diffPath(line string) (string, error) {
+	names := strings.TrimPrefix(line, "diff --git ")
+	if strings.HasPrefix(names, `"`) {
+		a, rest, ok := unquote(names)
+		if ok && strings.HasPrefix(a, "a/") && strings.HasPrefix(rest, " ") {
+			if b, rest, ok := unquote(rest[1:]); ok && rest == "" && b == "b/"+a[2:] {
+				return a[2:], nil
+			}
+		}
+	} else if n := (len(names) - len("a/ b/")) / 2; n > 0 && len(names) == 2*n+len("a/ b/") {
+		if p := names[2 : 2+n]; names[:2] == "a/" && names[2+n:5+n] == " b/" && names[5+n:] == p {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("cannot read the path from %q", line)
+}
+
+// unquote reads a C-style quoted string, as git writes unusual paths, from
+// the start of s, and returns it and the rest of s. Bytes git leaves alone
+// pass through as they are, so non-UTF-8 names survive.
+func unquote(s string) (string, string, bool) {
+	if !strings.HasPrefix(s, `"`) {
+		return "", s, false
+	}
+	escapes := map[byte]byte{'a': '\a', 'b': '\b', 't': '\t', 'n': '\n', 'v': '\v', 'f': '\f', 'r': '\r', '"': '"', '\\': '\\'}
+	octal := func(c byte) bool { return '0' <= c && c <= '7' }
+	var b strings.Builder
+	for i := 1; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '"':
+			return b.String(), s[i+1:], true
+		case '\\':
+			if i+1 >= len(s) {
+				return "", s, false
+			}
+			e := s[i+1]
+			if r, ok := escapes[e]; ok {
+				b.WriteByte(r)
+				i++
+				continue
+			}
+			if i+3 >= len(s) || e > '3' || !octal(e) || !octal(s[i+2]) || !octal(s[i+3]) {
+				return "", s, false
+			}
+			b.WriteByte((e-'0')<<6 | (s[i+2]-'0')<<3 | (s[i+3] - '0'))
+			i += 3
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return "", s, false
 }
 
 // parseFile splits one file's section into hunks.
