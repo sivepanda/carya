@@ -51,7 +51,7 @@ func RunOpenCodeHook(event string, stdin io.Reader, stdout io.Writer, opts HookO
 	if err != nil || len(paths) == 0 {
 		return err
 	}
-	report, err := editReport(s, absPaths(in.CWD, paths), opts.now())
+	report, err := editReport(s, absPaths(in.CWD, paths), opts.now(), "")
 	if err != nil || report == "" {
 		return err
 	}

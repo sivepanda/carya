@@ -20,6 +20,7 @@ const (
 // context; PreToolUse may answer {"hookSpecificOutput": {"hookEventName":
 // "PreToolUse", "additionalContext": ...}} to add context without blocking.
 type jsonHookInput struct {
+	SessionID string          `json:"session_id"`
 	CWD       string          `json:"cwd"`
 	ToolName  string          `json:"tool_name"`
 	ToolInput json.RawMessage `json:"tool_input"`
@@ -75,7 +76,7 @@ func (a jsonAdapter) run(event string, stdin io.Reader, stdout io.Writer, opts H
 		if err != nil || len(paths) == 0 {
 			return err
 		}
-		report, err := editReport(s, absPaths(in.CWD, paths), opts.now())
+		report, err := editReport(s, absPaths(in.CWD, paths), opts.now(), in.SessionID)
 		if err != nil || report == "" {
 			return err
 		}

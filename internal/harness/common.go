@@ -3,6 +3,9 @@
 package harness
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -93,10 +96,17 @@ func absPaths(dir string, paths []string) []string {
 
 // editReport is what an agent is told about peers before (or right after)
 // it edits paths, or "" when nobody else is changing them.
-func editReport(s *agent.Session, paths []string, now time.Time) (string, error) {
+//
+// With a session ID, a change the session was already told about (same
+// peer, same change, same conflict verdict) is not repeated, so an agent
+// editing a file several times hears about each peer change once.
+func editReport(s *agent.Session, paths []string, now time.Time, session string) (string, error) {
 	changes, err := s.Check(paths)
 	if err != nil || len(changes) == 0 {
 		return "", err
+	}
+	if changes = unseen(s, session, changes); len(changes) == 0 {
+		return "", nil
 	}
 	report := "Carya: " + peers.Summary(changes, now)
 	if len(report) > maxContext {
@@ -104,6 +114,36 @@ func editReport(s *agent.Session, paths []string, now time.Time) (string, error)
 			"\n… (truncated; run `carya check " + changes[0].Path + "` for the full diff)\n"
 	}
 	return report, nil
+}
+
+// unseen drops the changes this session was already shown and records the
+// rest as shown.
+func unseen(s *agent.Session, session string, changes []peers.Change) []peers.Change {
+	if session == "" {
+		return changes
+	}
+	sum := sha1.Sum([]byte(session))
+	path := filepath.Join(s.Repo.CaryaPath(), "notified", hex.EncodeToString(sum[:8])+".json")
+	seen := map[string]bool{}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &seen)
+	}
+	var fresh []peers.Change
+	for _, ch := range changes {
+		k := sha1.Sum([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%t\x00%s", ch.Path, ch.UserID, ch.Status, ch.Conflict, ch.Patch)))
+		key := hex.EncodeToString(k[:])
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		fresh = append(fresh, ch)
+	}
+	if len(fresh) > 0 {
+		if data, err := json.Marshal(seen); err == nil && os.MkdirAll(filepath.Dir(path), 0755) == nil {
+			_ = os.WriteFile(path, data, 0644)
+		}
+	}
+	return fresh
 }
 
 // toolsHint tells the agent which history commands it can ask. It is the
