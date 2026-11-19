@@ -361,6 +361,9 @@ func Commit(repoRoot string, refs []string, message string) (string, []Hunk, err
 	if len(refs) == 0 {
 		return "", nil, errors.New("name the hunk IDs or files to commit")
 	}
+	if err := checkNoOperation(repoRoot); err != nil {
+		return "", nil, err
+	}
 	all, err := List(repoRoot)
 	if err != nil {
 		return "", nil, err
@@ -384,6 +387,30 @@ func Commit(repoRoot string, refs []string, message string) (string, []Hunk, err
 		return out, picked, fmt.Errorf("committed, but could not update the index to match: %w", err)
 	}
 	return out, picked, nil
+}
+
+// checkNoOperation refuses to commit while git is in the middle of a merge,
+// cherry-pick or revert: the commit would become that operation's, recording
+// its other parent or taking its author, with only some of its changes.
+func checkNoOperation(repoRoot string) error {
+	out, err := run(repoRoot, nil, "", "rev-parse", "--git-path", "MERGE_HEAD", "--git-path", "CHERRY_PICK_HEAD", "--git-path", "REVERT_HEAD")
+	if err != nil {
+		return err
+	}
+	paths := strings.Split(strings.TrimSpace(out), "\n")
+	for i, op := range []string{"merge", "cherry-pick", "revert"} {
+		if i >= len(paths) {
+			break
+		}
+		p := paths[i]
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(repoRoot, p)
+		}
+		if _, err := os.Stat(p); err == nil {
+			return fmt.Errorf("a %s is in progress; finish or abort it before committing hunks", op)
+		}
+	}
+	return nil
 }
 
 // commitPatch commits HEAD (or nothing, on an unborn branch) with patch

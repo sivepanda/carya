@@ -1029,3 +1029,25 @@ func TestCommitRefusals(t *testing.T) {
 		t.Error("Commit with nothing to commit succeeded")
 	}
 }
+
+func TestCommitRefusesDuringMerge(t *testing.T) {
+	r := newRepo(t)
+	r.write("f.txt", "f\n")
+	r.commitAll("base")
+	r.git("checkout", "-q", "-b", "other")
+	r.write("g.txt", "g\n")
+	r.commitAll("other")
+	r.git("checkout", "-q", "main")
+	r.write("h.txt", "h\n")
+	r.commitAll("main")
+	r.git("merge", "-q", "--no-ff", "--no-commit", "other")
+	r.write("f.txt", "agent change\n")
+	head := r.head()
+
+	if _, _, err := Commit(r.dir, []string{"f.txt"}, "during merge"); err == nil || !strings.Contains(err.Error(), "merge") {
+		t.Fatalf("Commit during a merge: %v", err)
+	}
+	if r.head() != head {
+		t.Error("HEAD moved")
+	}
+}
