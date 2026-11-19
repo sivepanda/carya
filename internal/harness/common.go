@@ -106,15 +106,24 @@ func editReport(s *agent.Session, paths []string, now time.Time) (string, error)
 	return report, nil
 }
 
-// sessionOverview is a short note on who else has unfinished work in the
-// repository, or "" when nobody does. Per-file detail arrives only when the
-// agent goes to edit a file, to keep session context small.
+// toolsHint tells the agent which history commands it can ask. It is the
+// only thing added to every session; the answers come only when asked.
+const toolsHint = "Carya: before changing a file, `carya related <file>` lists files that usually change with it and `carya why <file>[:line]` shows why it changed and who is changing it now.\n"
+
+// sessionOverview is the session-start note: the history commands, then
+// who else has unfinished work in the repository, if anyone. Per-file detail
+// arrives only when the agent goes to edit a file, to keep session context
+// small.
 func sessionOverview(s *agent.Session, now time.Time) (string, error) {
 	states, err := peers.NewChecker(s.Repo.RootPath()).Overview(s.UserID)
-	if err != nil || len(states) == 0 {
-		return "", err
+	if err != nil {
+		return toolsHint, err
+	}
+	if len(states) == 0 {
+		return toolsHint, nil
 	}
 	var b strings.Builder
+	b.WriteString(toolsHint)
 	fmt.Fprintf(&b, "Carya: other agents have unfinished work in this repository (you are %s).\n", s.UserID)
 	for i, st := range states {
 		if i == 5 {

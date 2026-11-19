@@ -64,8 +64,8 @@ func TestClaudeHooksWarnBeforeEditingAPeersFile(t *testing.T) {
 
 	// Agent B starts, edits shared.txt with a shell command, and its
 	// PostToolUse hook publishes the result.
-	if out := hook(t, EventSessionStart, map[string]any{"cwd": other, "source": "startup"}, HookOptions{}); out != "" {
-		t.Fatalf("nobody else is working yet, got session context:\n%s", out)
+	if out := hook(t, EventSessionStart, map[string]any{"cwd": other, "source": "startup"}, HookOptions{}); out != toolsHint {
+		t.Fatalf("nobody else is working yet, so only the tools hint is expected, got:\n%s", out)
 	}
 	if err := os.WriteFile(filepath.Join(other, "shared.txt"), []byte("from b\n"), 0644); err != nil {
 		t.Fatal(err)
