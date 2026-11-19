@@ -476,6 +476,29 @@ func TestListAndCommitWithoutTrailingNewline(t *testing.T) {
 	}
 }
 
+// Lines whose content starts with "-- " or "++ " show up in a diff as
+// "--- ..." and "+++ ...", like file headers, but they are changed lines.
+func TestListCountsLinesThatLookLikeFileHeaders(t *testing.T) {
+	r := newRepo(t)
+	r.write("q.sql", "-- comment\nselect 1;\n++ counter\n")
+	r.write("gone.sql", "-- gone\n")
+	r.commitAll("base")
+	r.write("q.sql", "-- new comment\nselect 1;\n++ x\n")
+	r.write("n.sql", "-- a\n++ b\n")
+	r.remove("gone.sql")
+
+	hs := r.list()
+	if h := one(t, hs, "q.sql"); h.Added != 2 || h.Removed != 2 {
+		t.Errorf("q.sql: +%d -%d, want +2 -2", h.Added, h.Removed)
+	}
+	if h := one(t, hs, "n.sql"); h.Added != 2 || h.Removed != 0 {
+		t.Errorf("n.sql: +%d -%d, want +2 -0", h.Added, h.Removed)
+	}
+	if h := one(t, hs, "gone.sql"); h.Added != 0 || h.Removed != 1 {
+		t.Errorf("gone.sql: +%d -%d, want +0 -1", h.Added, h.Removed)
+	}
+}
+
 func TestListTypeChange(t *testing.T) {
 	skipOnWindows(t)
 	r := newRepo(t)

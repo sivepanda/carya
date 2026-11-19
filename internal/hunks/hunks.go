@@ -183,10 +183,12 @@ func parseFile(path string, section []string) []Hunk {
 	return hunks
 }
 
+// count counts the added and removed lines of hunk bodies. Every body line
+// starts with ' ', '+', '-' or '\', so "--- x" is a removed "-- x", not a
+// file header: those come before the first @@ line and are never counted.
 func count(lines []string) (added, removed int) {
 	for _, l := range lines {
 		switch {
-		case strings.HasPrefix(l, "+++ "), strings.HasPrefix(l, "--- "):
 		case strings.HasPrefix(l, "+"):
 			added++
 		case strings.HasPrefix(l, "-"):
