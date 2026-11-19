@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -29,93 +30,166 @@ var setupCmd = &cobra.Command{
 	Long: `Set Carya up for a coding agent harness in one step, with no prompts.
 
 Each agent checkout gets its own identity. Agents publish what they have on
-disk after every tool call (including shell commands), and before an agent
-edits a file another agent is changing, Carya adds that change to its context.`,
+disk after every tool call (including shell commands), and when an agent
+edits a file another agent is changing, Carya shows it that change.
+
+Every harness takes --scope:
+  local    this repository, just you, nothing tracked changes (default)
+  project  this repository, a file you commit for everyone
+  user     your user config, active in every repository you run setup in
+
+Run setup again at any time; it replaces only what it wrote. --remove takes
+it out again.`,
 }
 
-var setupClaudeCmd = &cobra.Command{
-	Use:   "claude",
-	Short: "Set Carya up for Claude Code",
-	Long: `Set Carya up for Claude Code in this repository.
+// harnessSetup describes how `carya setup <name>` installs one harness.
+type harnessSetup struct {
+	name    string // as in `carya setup <name>` and `carya hook <name>`
+	display string
+	what    string // what gets installed, for messages
+	long    string
+	path    func(scope, repoRoot string) (string, error)
+	install func(path, carya string, requireOptIn bool) (bool, error)
+	remove  func(path string) (bool, error)
+	// excludes lists paths to keep out of git through info/exclude.
+	excludes func(scope string) []string
+	// next is printed after a successful install.
+	next string
+}
 
-Writes Carya's SessionStart, PreToolUse and PostToolUse hooks into a Claude
-Code settings file and sets up this checkout. Other worktrees set themselves
-up the first time a hook runs in them. Nothing tracked changes unless you
-choose --scope project.
+var harnessSetups = []harnessSetup{
+	{
+		name:    "claude",
+		display: "Claude Code",
+		what:    "hooks",
+		long: `Writes Carya's SessionStart, PreToolUse and PostToolUse hooks into
+.claude/settings.local.json (local), .claude/settings.json (project) or
+~/.claude/settings.json (user). Before Claude edits a file another agent is
+changing, the change is added to its context.`,
+		path:    harness.ClaudeSettingsPath,
+		install: harness.InstallClaudeHooks,
+		remove:  harness.RemoveClaudeHooks,
+		excludes: func(scope string) []string {
+			// ` + "`claude --worktree`" + ` puts worktrees inside the checkout.
+			ex := []string{".claude/worktrees/"}
+			if scope == harness.ScopeLocal {
+				ex = append(ex, ".claude/settings.local.json")
+			}
+			return ex
+		},
+		next: "New and running Claude Code sessions pick the hooks up automatically.",
+	},
+	{
+		name:    "codex",
+		display: "Codex",
+		what:    "hooks",
+		long: `Writes Carya's SessionStart, PreToolUse and PostToolUse hooks into
+.codex/hooks.json (local and project) or ~/.codex/hooks.json (user). Codex
+reads a worktree's hooks from the main checkout, so worktrees are covered.
+Before Codex applies a patch to a file another agent is changing, the change
+is added to its context.`,
+		path:    harness.CodexHooksPath,
+		install: harness.InstallCodexHooks,
+		remove:  harness.RemoveCodexHooks,
+		excludes: func(scope string) []string {
+			if scope == harness.ScopeLocal {
+				return []string{".codex/hooks.json"}
+			}
+			return nil
+		},
+		next: `Codex runs new hooks only after you approve them, once: start codex here,
+trust the project if it asks, then open /hooks and approve Carya's three
+hooks. Updating carya itself never needs approving again; only re-running
+setup in a way that changes the hooks does.`,
+	},
+	{
+		name:    "opencode",
+		display: "OpenCode",
+		what:    "plugin",
+		long: `Writes a small plugin to .opencode/plugins/carya.ts (local and project) or
+~/.config/opencode/plugins/carya.ts (user). It works with OpenCode 1.x and
+2.x. After every tool call it publishes the checkout's state, and after an
+edit it appends other agents' changes to the edited files to the tool output.
+For worktrees outside this checkout, use --scope project or user.`,
+		path:    harness.OpenCodePluginPath,
+		install: harness.InstallOpenCodePlugin,
+		remove:  harness.RemoveOpenCodePlugin,
+		excludes: func(scope string) []string {
+			if scope == harness.ScopeLocal {
+				return []string{".opencode/plugins/carya.ts"}
+			}
+			return nil
+		},
+		next: "OpenCode loads plugins at startup; restart any running OpenCode session.",
+	},
+}
 
-Scopes:
-  local    .claude/settings.local.json, just you, this repository (default)
-  project  .claude/settings.json, committed, for everyone on the repository
-  user     ~/.claude/settings.json, every repository you run setup in
-
-Run it again at any time; it replaces its own hooks and leaves the rest of
-the file alone. --remove takes the hooks out again.`,
-	Args: cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		wd, err := os.Getwd()
-		if err != nil {
-			fail(err)
-		}
-		repo := mustRepo()
-		path, err := harness.ClaudeSettingsPath(setupScope, repo.RootPath())
-		if err != nil {
-			fail(err)
-		}
-
-		if setupRemove {
-			changed, err := harness.RemoveClaudeHooks(path)
+func newSetupCmd(h harnessSetup) *cobra.Command {
+	return &cobra.Command{
+		Use:   h.name,
+		Short: "Set Carya up for " + h.display,
+		Long:  "Set Carya up for " + h.display + " in this repository.\n\n" + h.long,
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			wd, err := os.Getwd()
 			if err != nil {
 				fail(err)
 			}
-			if changed {
-				fmt.Printf("Removed Carya's hooks from %s\n", path)
-			} else {
-				fmt.Printf("No Carya hooks in %s\n", path)
-			}
-			return
-		}
-
-		s, err := agent.Bootstrap(wd, "claude")
-		if err != nil {
-			fail(err)
-		}
-		if err := harness.OptIn(wd); err != nil {
-			fail(err)
-		}
-		// `claude --worktree` puts worktrees inside the checkout; keep them
-		// (and personal settings) out of git without editing .gitignore.
-		excludes := []string{".claude/worktrees/"}
-		if setupScope == harness.ScopeLocal {
-			excludes = append(excludes, ".claude/settings.local.json")
-		}
-		for _, pattern := range excludes {
-			if err := s.Repo.EnsureLocallyExcluded(pattern); err != nil {
+			repo := mustRepo()
+			path, err := h.path(setupScope, repo.RootPath())
+			if err != nil {
 				fail(err)
 			}
-		}
 
-		carya, warning := hookCommand(setupScope)
-		changed, err := harness.InstallClaudeHooks(path, carya, setupScope == harness.ScopeUser)
-		if err != nil {
-			fail(err)
-		}
+			if setupRemove {
+				changed, err := h.remove(path)
+				if err != nil {
+					fail(err)
+				}
+				if changed {
+					fmt.Printf("Removed Carya's %s %s from %s\n", h.display, h.what, path)
+				} else {
+					fmt.Printf("No Carya %s in %s\n", h.what, path)
+				}
+				return
+			}
 
-		if changed {
-			fmt.Printf("Installed Carya's Claude Code hooks in %s\n", path)
-		} else {
-			fmt.Printf("Carya's Claude Code hooks are already up to date in %s\n", path)
-		}
-		fmt.Printf("This checkout's agent identity: %s\n", s.UserID)
-		if ok, why := s.Sharing(); ok {
-			fmt.Println("States are shared through origin (refs/carya/*, which GitHub's branch list does not show).")
-		} else {
-			fmt.Printf("States stay on this machine: %s.\n", why)
-		}
-		if warning != "" {
-			fmt.Fprintln(os.Stderr, "Warning: "+warning)
-		}
-		fmt.Println("New and running Claude Code sessions pick the hooks up automatically.")
-	},
+			s, err := agent.Bootstrap(wd, h.name)
+			if err != nil {
+				fail(err)
+			}
+			if err := harness.OptIn(wd); err != nil {
+				fail(err)
+			}
+			for _, pattern := range h.excludes(setupScope) {
+				if err := s.Repo.EnsureLocallyExcluded(pattern); err != nil {
+					fail(err)
+				}
+			}
+
+			carya, warning := hookCommand(setupScope)
+			changed, err := h.install(path, carya, setupScope == harness.ScopeUser)
+			if err != nil {
+				fail(err)
+			}
+
+			if changed {
+				fmt.Printf("Installed Carya's %s %s in %s\n", h.display, h.what, path)
+			} else {
+				fmt.Printf("Carya's %s %s are already up to date in %s\n", h.display, h.what, path)
+			}
+			fmt.Printf("This checkout's agent identity: %s\n", s.UserID)
+			if ok, why := s.Sharing(); ok {
+				fmt.Println("States are shared through origin (refs/carya/*, which GitHub's branch list does not show).")
+			} else {
+				fmt.Printf("States stay on this machine: %s.\n", why)
+			}
+			if warning != "" {
+				fmt.Fprintln(os.Stderr, "Warning: "+warning)
+			}
+			fmt.Println(h.next)
+		},
+	}
 }
 
 // hookCommand picks how hooks should invoke Carya. A committed settings file
@@ -221,12 +295,17 @@ var hookCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		if args[0] != "claude" {
+		run := map[string]func(string, io.Reader, io.Writer, harness.HookOptions) error{
+			"claude":   harness.RunClaudeHook,
+			"codex":    harness.RunCodexHook,
+			"opencode": harness.RunOpenCodeHook,
+		}[args[0]]
+		if run == nil {
 			fmt.Fprintf(os.Stderr, "carya hook: unsupported harness %q\n", args[0])
 			return
 		}
 		opts := harness.HookOptions{RequireOptIn: hookRequireOptIn, StartSync: startStateSync}
-		if err := harness.RunClaudeHook(args[1], os.Stdin, os.Stdout, opts); err != nil {
+		if err := run(args[1], os.Stdin, os.Stdout, opts); err != nil {
 			// Never fail the agent's tool call because of Carya: exit 0 and
 			// leave the reason in the log.
 			log.Printf("carya hook %s %s: %v", args[0], args[1], err)
@@ -273,7 +352,7 @@ func mustAgentSession() *agent.Session {
 	}
 	s, err := agent.Open(wd)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\nRun 'carya setup claude' (or 'carya init') first.\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\nRun 'carya setup claude' (or codex, opencode, or 'carya init') first.\n", err)
 		os.Exit(1)
 	}
 	return s
@@ -285,9 +364,11 @@ func fail(err error) {
 }
 
 func init() {
-	setupClaudeCmd.Flags().StringVar(&setupScope, "scope", harness.ScopeLocal, "where to write the hooks: local, project or user")
-	setupClaudeCmd.Flags().BoolVar(&setupRemove, "remove", false, "remove Carya's hooks instead of installing them")
-	setupCmd.AddCommand(setupClaudeCmd)
+	setupCmd.PersistentFlags().StringVar(&setupScope, "scope", harness.ScopeLocal, "where to install: local, project or user")
+	setupCmd.PersistentFlags().BoolVar(&setupRemove, "remove", false, "remove what setup installed instead of installing it")
+	for _, h := range harnessSetups {
+		setupCmd.AddCommand(newSetupCmd(h))
+	}
 	checkCmd.Flags().BoolVar(&checkJSON, "json", false, "print the changes as JSON")
 	snapshotCmd.Flags().BoolVar(&snapshotPush, "push", false, "also push your state to origin and fetch others'")
 	hookCmd.Flags().BoolVar(&hookRequireOptIn, "require-opt-in", false, "do nothing unless the repository ran carya setup")

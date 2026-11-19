@@ -34,31 +34,91 @@ func ClaudeSettingsPath(scope, repoRoot string) (string, error) {
 	}
 }
 
-// claudeHookSpec is one hook Carya installs.
-type claudeHookSpec struct {
-	event   string // Claude Code event name
-	matcher string
-	arg     string // `carya hook claude <arg>`
+// CodexHooksPath returns the Codex hooks.json for scope. Codex reads a
+// linked worktree's hooks from the main checkout, so the local and project
+// files cover worktrees too.
+func CodexHooksPath(scope, repoRoot string) (string, error) {
+	switch scope {
+	case ScopeLocal, ScopeProject:
+		return filepath.Join(repoRoot, ".codex", "hooks.json"), nil
+	case ScopeUser:
+		home := os.Getenv("CODEX_HOME")
+		if home == "" {
+			userHome, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+			home = filepath.Join(userHome, ".codex")
+		}
+		return filepath.Join(home, "hooks.json"), nil
+	default:
+		return "", fmt.Errorf("unknown scope %q (want %s, %s or %s)", scope, ScopeLocal, ScopeProject, ScopeUser)
+	}
 }
 
-var claudeHookSpecs = []claudeHookSpec{
+// hookSpec is one hook Carya installs.
+type hookSpec struct {
+	event   string // the harness's event name
+	matcher string
+	arg     string // `carya hook <harness> <arg>`
+}
+
+// hookFile describes a harness whose hooks live in a JSON file shaped
+// {"hooks": {Event: [{matcher, hooks: [{type, command, timeout}]}]}}, which
+// both Claude Code and Codex use.
+type hookFile struct {
+	harness string
+	specs   []hookSpec
+}
+
+var claudeHooks = hookFile{harness: "claude", specs: []hookSpec{
 	{event: "SessionStart", arg: EventSessionStart},
 	{event: "PreToolUse", matcher: "Edit|Write|NotebookEdit", arg: EventPreToolUse},
 	{event: "PostToolUse", matcher: "Edit|Write|NotebookEdit|Bash", arg: EventPostToolUse},
-}
+}}
+
+// Codex matches tool names by regex; apply_patch also matches its Edit and
+// Write aliases. PostToolUse without a matcher covers every local tool,
+// shell commands included.
+var codexHooks = hookFile{harness: "codex", specs: []hookSpec{
+	{event: "SessionStart", arg: EventSessionStart},
+	{event: "PreToolUse", matcher: "^apply_patch$", arg: EventPreToolUse},
+	{event: "PostToolUse", arg: EventPostToolUse},
+}}
 
 // InstallClaudeHooks merges Carya's hooks into the Claude Code settings file
 // at path, creating it if needed. carya is the command that runs Carya.
 // Earlier Carya hooks are replaced and everything else in the file is kept
 // in its original order. It reports whether the file changed.
 func InstallClaudeHooks(path, carya string, requireOptIn bool) (bool, error) {
-	return editClaudeHooks(path, func(hooks *orderedObject) error {
-		for _, spec := range claudeHookSpecs {
-			groups, err := withoutCaryaHooks(hooks.get(spec.event))
+	return claudeHooks.install(path, carya, requireOptIn)
+}
+
+// RemoveClaudeHooks takes Carya's hooks out of the Claude Code settings file
+// at path, leaving everything else. It reports whether the file changed.
+func RemoveClaudeHooks(path string) (bool, error) {
+	return claudeHooks.remove(path)
+}
+
+// InstallCodexHooks does for a Codex hooks.json what InstallClaudeHooks does
+// for Claude Code settings.
+func InstallCodexHooks(path, carya string, requireOptIn bool) (bool, error) {
+	return codexHooks.install(path, carya, requireOptIn)
+}
+
+// RemoveCodexHooks takes Carya's hooks out of a Codex hooks.json.
+func RemoveCodexHooks(path string) (bool, error) {
+	return codexHooks.remove(path)
+}
+
+func (f hookFile) install(path, carya string, requireOptIn bool) (bool, error) {
+	return editHookFile(path, func(hooks *orderedObject) error {
+		for _, spec := range f.specs {
+			groups, err := withoutCaryaHooks(hooks.get(spec.event), f.harness)
 			if err != nil {
 				return fmt.Errorf("%s hooks: %w", spec.event, err)
 			}
-			command := shellQuote(carya) + " hook claude " + spec.arg
+			command := shellQuote(carya) + " hook " + f.harness + " " + spec.arg
 			if requireOptIn {
 				command += " --require-opt-in"
 			}
@@ -79,19 +139,17 @@ func InstallClaudeHooks(path, carya string, requireOptIn bool) (bool, error) {
 	})
 }
 
-// RemoveClaudeHooks takes Carya's hooks out of the settings file at path,
-// leaving everything else. It reports whether the file changed.
-func RemoveClaudeHooks(path string) (bool, error) {
+func (f hookFile) remove(path string) (bool, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return false, nil
 	}
-	return editClaudeHooks(path, func(hooks *orderedObject) error {
-		for _, spec := range claudeHookSpecs {
+	return editHookFile(path, func(hooks *orderedObject) error {
+		for _, spec := range f.specs {
 			raw := hooks.get(spec.event)
 			if raw == nil {
 				continue
 			}
-			groups, err := withoutCaryaHooks(raw)
+			groups, err := withoutCaryaHooks(raw, f.harness)
 			if err != nil {
 				return fmt.Errorf("%s hooks: %w", spec.event, err)
 			}
@@ -109,7 +167,7 @@ func RemoveClaudeHooks(path string) (bool, error) {
 	})
 }
 
-func editClaudeHooks(path string, edit func(hooks *orderedObject) error) (bool, error) {
+func editHookFile(path string, edit func(hooks *orderedObject) error) (bool, error) {
 	original, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return false, err
@@ -186,7 +244,7 @@ func sameJSON(a, b []byte) bool {
 
 // withoutCaryaHooks decodes an event's hook groups and drops Carya's hooks
 // from them, removing groups left empty.
-func withoutCaryaHooks(raw json.RawMessage) ([]any, error) {
+func withoutCaryaHooks(raw json.RawMessage, harness string) ([]any, error) {
 	if raw == nil {
 		return nil, nil
 	}
@@ -199,7 +257,7 @@ func withoutCaryaHooks(raw json.RawMessage) ([]any, error) {
 		list, _ := g["hooks"].([]any)
 		var others []any
 		for _, h := range list {
-			if hm, ok := h.(map[string]any); ok && isCaryaHook(hm) {
+			if hm, ok := h.(map[string]any); ok && isCaryaHook(hm, harness) {
 				continue
 			}
 			others = append(others, h)
@@ -213,10 +271,10 @@ func withoutCaryaHooks(raw json.RawMessage) ([]any, error) {
 	return kept, nil
 }
 
-func isCaryaHook(h map[string]any) bool {
+func isCaryaHook(h map[string]any, harness string) bool {
 	command, _ := h["command"].(string)
 	first, rest := firstShellWord(strings.TrimSpace(command))
-	return filepath.Base(first) == "carya" && strings.HasPrefix(strings.TrimSpace(rest), "hook claude ")
+	return filepath.Base(first) == "carya" && strings.HasPrefix(strings.TrimSpace(rest), "hook "+harness+" ")
 }
 
 // firstShellWord splits off the first word of a command, undoing shellQuote's
