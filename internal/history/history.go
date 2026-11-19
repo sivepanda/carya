@@ -25,7 +25,7 @@ const (
 	// windowCommits bounds a full (re)build to the most recent history,
 	// which is also the most relevant.
 	windowCommits = 5000
-	schemaVersion = "2"
+	schemaVersion = "3"
 	// ReasonTrailer is read when present; Carya never writes it.
 	ReasonTrailer = "Carya-Reason"
 )
@@ -84,6 +84,7 @@ func (ix *Index) createTables(db execer) error {
 			a TEXT NOT NULL,
 			b TEXT NOT NULL,
 			count INTEGER NOT NULL,
+			weight REAL NOT NULL,
 			PRIMARY KEY (a, b)
 		);
 		CREATE INDEX IF NOT EXISTS idx_history_pairs_b ON history_pairs(b);
@@ -208,8 +209,11 @@ func (ix *Index) ingest(tx *sql.Tx, recs []record) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	insPair, err := tx.Prepare(`INSERT INTO history_pairs(a, b, count) VALUES(?, ?, 1)
-		ON CONFLICT(a, b) DO UPDATE SET count = count + 1`)
+	// A commit touching n files adds 1/(n-1) to each pair it contains, so a
+	// focused two-file commit links its files strongly and a catch-all
+	// commit links its files only weakly.
+	insPair, err := tx.Prepare(`INSERT INTO history_pairs(a, b, count, weight) VALUES(?, ?, 1, ?)
+		ON CONFLICT(a, b) DO UPDATE SET count = count + 1, weight = weight + excluded.weight`)
 	if err != nil {
 		return 0, err
 	}
@@ -235,16 +239,17 @@ func (ix *Index) ingest(tx *sql.Tx, recs []record) (int, error) {
 				return n, err
 			}
 		}
-		if len(rec.files) > maxPairFiles {
+		if len(rec.files) > maxPairFiles || len(rec.files) < 2 {
 			continue
 		}
+		w := 1 / float64(len(rec.files)-1)
 		for a := 0; a < len(rec.files); a++ {
 			for b := a + 1; b < len(rec.files); b++ {
 				x, y := rec.files[a], rec.files[b]
 				if x > y {
 					x, y = y, x
 				}
-				if _, err := insPair.Exec(x, y); err != nil {
+				if _, err := insPair.Exec(x, y, w); err != nil {
 					return n, err
 				}
 			}
@@ -258,6 +263,10 @@ type Related struct {
 	Path     string  `json:"path"`
 	Together int     `json:"together"` // commits that changed both
 	Share    float64 `json:"share"`    // Together / commits that changed the queried file
+	// Strength discounts commits by size: each shared commit counts
+	// 1/(files-1), divided by the commits that changed the queried file. A
+	// pair only ever changed together in two-file commits scores 1.
+	Strength float64 `json:"strength"`
 }
 
 // RelatedFiles returns the files most often changed in the same commit as
@@ -268,11 +277,11 @@ func (ix *Index) RelatedFiles(path string, limit int) ([]Related, int, error) {
 		return nil, total, err
 	}
 	rows, err := ix.db.Query(`
-		SELECT other, count FROM (
-			SELECT b AS other, count FROM history_pairs WHERE a = ?
+		SELECT other, count, weight FROM (
+			SELECT b AS other, count, weight FROM history_pairs WHERE a = ?
 			UNION ALL
-			SELECT a AS other, count FROM history_pairs WHERE b = ?
-		) ORDER BY count DESC, other ASC`, path, path)
+			SELECT a AS other, count, weight FROM history_pairs WHERE b = ?
+		) ORDER BY weight DESC, count DESC, other ASC`, path, path)
 	if err != nil {
 		return nil, total, err
 	}
@@ -282,9 +291,11 @@ func (ix *Index) RelatedFiles(path string, limit int) ([]Related, int, error) {
 	var out []Related
 	for rows.Next() {
 		var r Related
-		if err := rows.Scan(&r.Path, &r.Together); err != nil {
+		var weight float64
+		if err := rows.Scan(&r.Path, &r.Together, &weight); err != nil {
 			return nil, total, err
 		}
+		r.Strength = weight / float64(total)
 		if present != nil && !present[r.Path] {
 			continue // deleted since
 		}

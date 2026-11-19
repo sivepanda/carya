@@ -97,6 +97,11 @@ func TestRelatedAndWhy(t *testing.T) {
 	if related[0].Share != 0.6 {
 		t.Fatalf("share = %v, want 0.6", related[0].Share)
 	}
+	// a.go and a_test.go shared "add a" (3 files, weight 1/2), "fix a"
+	// (2 files, 1) and "tweak a" (3 files, 1/2): 2 over a.go's 5 commits.
+	if got := related[0].Strength; got < 0.399 || got > 0.401 {
+		t.Fatalf("strength = %v, want 0.4", got)
+	}
 
 	why, total, err := ix.Why("b.go", 5)
 	if err != nil || total != 1 || len(why) != 1 {
@@ -156,5 +161,28 @@ func TestUpdateInEmptyRepo(t *testing.T) {
 	ix := open(t, newRepo(t))
 	if n, err := ix.Update(); err != nil || n != 0 {
 		t.Fatalf("empty repo: n=%d err=%v", n, err)
+	}
+}
+
+func TestCatchAllCommitsCountLess(t *testing.T) {
+	r := newRepo(t)
+	big := map[string]string{"x.go": "1", "y.go": "1"}
+	for i := 0; i < 20; i++ {
+		big[fmt.Sprintf("misc%02d.go", i)] = "1"
+	}
+	r.commit("bug fixes", big)
+	r.commit("x and y", map[string]string{"x.go": "2", "y.go": "2"})
+	r.commit("x and misc00", map[string]string{"x.go": "3", "misc00.go": "2", "misc01.go": "2", "misc02.go": "2"})
+	ix := open(t, r)
+	if _, err := ix.Update(); err != nil {
+		t.Fatal(err)
+	}
+	related, _, err := ix.RelatedFiles("x.go", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// y.go shares a focused commit; misc00.go shares two, but larger ones.
+	if related[0].Path != "y.go" {
+		t.Fatalf("the focused pair should rank first: %+v", related)
 	}
 }
