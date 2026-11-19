@@ -359,9 +359,10 @@ func binaryHunk(h hunks.Hunk) bool {
 }
 
 var commitCmd = &cobra.Command{
-	Use:   "commit -m <message> <hunk id, file or directory>...",
+	Use:   "commit -m <message> <hunk id, id:lines, file or directory>...",
 	Short: "Commit exactly the chosen hunks",
-	Long: `Commit the hunks (IDs from 'carya hunks'), whole files and directories
+	Long: `Commit the hunks (IDs from 'carya hunks'), parts of hunks (id:lines, with
+the line numbers 'carya hunks --diff' shows), whole files and directories
 given, and nothing else: other changes, staged or not, stay as they are. It
 runs git commit, so your identity and the repository's commit hooks apply.
 Paths are read from the checkout root and then from the current directory;
