@@ -22,14 +22,14 @@ var (
 )
 
 // commitHint ends the listing; it is the same in both forms.
-const commitHint = `Commit some with: carya commit -m "<message>" <id, file or directory>...`
+const commitHint = `Commit some with: carya commit -m "<message>" <id, id:lines, file or directory>...`
 
 var hunksCmd = &cobra.Command{
 	Use:   "hunks [id, file or directory...]",
 	Short: "List uncommitted changes as hunks you can commit separately",
 	Long: `List the working tree's changes against HEAD, untracked files included, as
 hunks with short IDs. Commit any grouping of them with
-'carya commit -m <message> <id, file or directory>...'; the rest stays
+'carya commit -m <message> <id, id:lines, file or directory>...'; the rest stays
 uncommitted. IDs come from each hunk's content, so they stay the same while
 you commit other hunks. Each hunk shows its ID, lines added and removed, the
 lines of the file it changes (L10-14) and its first changed line; --files
