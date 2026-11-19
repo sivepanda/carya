@@ -56,13 +56,22 @@ func publish(t *testing.T, repo, user string, files map[string]string) {
 
 func backdate(t *testing.T, repo, user string) {
 	t.Helper()
+	redate(t, repo, user, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+}
+
+// redate republishes user's state with the same tree and base but published
+// at when. Commit times have one-second resolution, so tests that care about
+// the order of states set it explicitly instead of relying on the clock.
+func redate(t *testing.T, repo, user string, when time.Time) {
+	t.Helper()
 	ref := git.UserTreeRefPath(user)
 	tree := gitRun(t, repo, "rev-parse", ref+"^{tree}")
 	base := gitRun(t, repo, "rev-parse", ref+"^")
-	cmd := exec.Command("git", "commit-tree", tree, "-p", base, "-m", "old")
+	date := when.UTC().Format(time.RFC3339)
+	cmd := exec.Command("git", "commit-tree", tree, "-p", base, "-m", "redated")
 	cmd.Dir = repo
 	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=c", "GIT_AUTHOR_EMAIL=c@i", "GIT_COMMITTER_NAME=c",
-		"GIT_COMMITTER_EMAIL=c@i", "GIT_AUTHOR_DATE=2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2000-01-01T00:00:00Z")
+		"GIT_COMMITTER_EMAIL=c@i", "GIT_AUTHOR_DATE="+date, "GIT_COMMITTER_DATE="+date)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatal(err)
@@ -80,6 +89,11 @@ func setup(t *testing.T) string {
 
 	publish(t, repo, "alice", map[string]string{"a.txt": "alice\n"})
 	publish(t, repo, "bob", map[string]string{"b.txt": "bob\n"})
+	// Alice is the newest state. Pin both times: published back to back,
+	// they may or may not fall in the same second.
+	now := time.Now()
+	redate(t, repo, "bob", now.Add(-2*time.Minute))
+	redate(t, repo, "alice", now.Add(-time.Minute))
 	publish(t, repo, "old", map[string]string{"a.txt": "old\n"})
 	backdate(t, repo, "old")
 	publish(t, repo, "me", map[string]string{"a.txt": "me\n"})
