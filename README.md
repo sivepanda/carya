@@ -45,6 +45,14 @@ By default nothing tracked changes: Carya keeps `.carya/` and the files it write
 - **Codex** asks you to approve new hooks once: start `codex`, trust the project, then approve Carya's hooks in `/hooks`. Before Codex applies a patch to a file another agent is changing, that change is added to its context.
 - **OpenCode** (1.x and 2.x) loads the plugin at startup. OpenCode plugins can't add context before a tool runs, so after an edit Carya appends other agents' changes to the edited files to the tool output.
 
+Before anyone opens a pull request, check that everyone's unfinished work fits together:
+
+```bash
+carya integrate
+```
+
+This merges every published state (each agent's and yours) onto the default branch in memory, leaves out and reports any state that conflicts along with whose work it collides with, and keeps the result at `refs/carya/integration`. It then checks the result out in a temporary worktree, runs the repository's Mycelia post-checkout setup, and builds and tests it (`--run` to choose the commands; by default they are detected from `go.mod`, `package.json`, `Cargo.toml`, `pyproject.toml` or a `Makefile`). Your checkout is never touched. Note that this runs other people's unfinished code on your machine. `--since 24h` leaves out states nobody has published in a day, `--merge-only` skips the build and tests, and `--json` is there for agents.
+
 Use `carya check <file>` to see other agents' unfinished changes to a file yourself. Agents in worktrees of the same repository see each other with no network; with an `origin` remote, states are also pushed to `refs/carya/*`, which does not show up as branches on GitHub. Cloud sessions don't share state yet.
 
 ## Planned Components
