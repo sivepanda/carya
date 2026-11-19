@@ -85,20 +85,32 @@ func printHunks(hs []hunks.Hunk, withDiff bool) {
 			note := map[string]string{"add": " (new file)", "delete": " (deleted)", "binary": " (binary)", "mode": " (mode change)"}[h.Kind]
 			fmt.Printf("  %s%s\n", h.Path, note)
 		}
-		label := h.Header
-		if label == "" {
-			label = h.Kind
-		}
-		if len(label) > 70 {
-			label = label[:70] + "…"
-		}
-		fmt.Printf("    %s  %-72s +%d -%d\n", h.ID, label, h.Added, h.Removed)
-		if withDiff && h.Kind != "binary" {
+		fmt.Printf("    %s  %-72s +%d -%d\n", h.ID, hunkLabel(h), h.Added, h.Removed)
+		if withDiff && !binaryHunk(h) {
 			for _, line := range strings.Split(strings.TrimRight(h.Diff, "\n"), "\n") {
 				fmt.Printf("        %s\n", line)
 			}
 		}
 	}
+}
+
+// hunkLabel is a hunk's @@ line, or its kind, cut to 70 characters; it
+// cuts on a character boundary, as the @@ line can end in any source text.
+func hunkLabel(h hunks.Hunk) string {
+	label := h.Header
+	if label == "" {
+		label = h.Kind
+	}
+	if r := []rune(label); len(r) > 70 {
+		label = string(r[:70]) + "…"
+	}
+	return label
+}
+
+// binaryHunk reports whether a hunk's diff is binary patch data, which an
+// added or deleted binary file has too.
+func binaryHunk(h hunks.Hunk) bool {
+	return h.Kind == "binary" || strings.Contains(h.Diff, "\nGIT binary patch\n")
 }
 
 var commitCmd = &cobra.Command{
