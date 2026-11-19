@@ -2,7 +2,9 @@ package compose
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,6 +95,54 @@ func TestCreateCommitIgnoresApplyWhitespaceConfig(t *testing.T) {
 			// whitespace either.
 			if got, _ := st.FindChunks("f.txt"); len(got) != 0 {
 				t.Errorf("committed chunk should be pruned, still have %d", len(got))
+			}
+		})
+	}
+}
+
+// Committing while git is in the middle of a merge, cherry-pick or revert
+// would make that operation's commit: a merge commit with only the chunk's
+// changes, or one that takes the picked commit's author.
+func TestCreateCommitRefusesDuringOperation(t *testing.T) {
+	for _, op := range []struct {
+		name  string
+		start []string
+	}{
+		{"merge", []string{"merge", "-q", "--no-ff", "--no-commit", "other"}},
+		{"cherry-pick", []string{"cherry-pick", "other"}},
+		{"revert", []string{"revert", "--no-edit", "HEAD~1"}},
+	} {
+		t.Run(op.name, func(t *testing.T) {
+			repo := baseRepo(t, map[string]string{"f.txt": "f\n", "c.txt": "base\n"})
+			gitRun(t, repo, "checkout", "-q", "-b", "other")
+			writeFile(t, repo, "c.txt", "other\n")
+			gitRun(t, repo, "commit", "-q", "-am", "other")
+			gitRun(t, repo, "checkout", "-q", "main")
+			writeFile(t, repo, "c.txt", "main\n")
+			gitRun(t, repo, "commit", "-q", "-am", "main")
+			writeFile(t, repo, "c.txt", "main again\n")
+			gitRun(t, repo, "commit", "-q", "-am", "main again")
+			// The merge stops before committing; the cherry-pick and the
+			// revert stop on their conflict in c.txt.
+			cmd := exec.Command("git", op.start...)
+			cmd.Dir = repo
+			_ = cmd.Run()
+			if _, err := os.Stat(filepath.Join(repo, ".git", strings.ToUpper(strings.ReplaceAll(op.name, "-", "_"))+"_HEAD")); err != nil {
+				t.Fatalf("no %s in progress: %v", op.name, err)
+			}
+			writeFile(t, repo, "f.txt", "agent change\n")
+			head := gitRun(t, repo, "rev-parse", "HEAD")
+
+			c, err := New(saveChunks(t, chunkOf(t, repo, "f.txt")), repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.SetSelected(0, true)
+			if _, err := c.CreateCommit("during " + op.name); err == nil || !strings.Contains(err.Error(), op.name) {
+				t.Fatalf("CreateCommit during a %s: %v", op.name, err)
+			}
+			if got := gitRun(t, repo, "rev-parse", "HEAD"); got != head {
+				t.Errorf("HEAD moved:\n%s", gitRun(t, repo, "log", "-1", "--format=%an %s%n%P", "HEAD"))
 			}
 		})
 	}

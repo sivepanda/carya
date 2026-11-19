@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -98,6 +99,9 @@ func runApply(repoPath string, env, args []string, patch string) error {
 }
 
 func ApplyAndCommit(repoPath, patch, message string) (string, error) {
+	if err := CheckNoOperation(repoPath); err != nil {
+		return "", err
+	}
 	var result string
 	err := withHeadIndex(repoPath, func(env []string) error {
 		if err := runApply(repoPath, env, []string{"--cached", "-"}, patch); err != nil {
@@ -121,6 +125,32 @@ func ApplyAndCommit(repoPath, patch, message string) (string, error) {
 		return result, fmt.Errorf("commit created but failed to refresh index: %w", err)
 	}
 	return result, nil
+}
+
+// CheckNoOperation refuses to commit while git is in the middle of a merge,
+// cherry-pick or revert: the commit would become that operation's, recording
+// its other parent or taking its author, with only some of its changes.
+func CheckNoOperation(repoPath string) error {
+	cmd := exec.Command("git", "rev-parse", "--git-path", "MERGE_HEAD", "--git-path", "CHERRY_PICK_HEAD", "--git-path", "REVERT_HEAD")
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("find git's operation state: %w", err)
+	}
+	paths := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for i, op := range []string{"merge", "cherry-pick", "revert"} {
+		if i >= len(paths) {
+			break
+		}
+		p := paths[i]
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(repoPath, p)
+		}
+		if _, err := os.Stat(p); err == nil {
+			return fmt.Errorf("a %s is in progress; finish or abort it before committing", op)
+		}
+	}
+	return nil
 }
 
 // syncRealIndex updates the repository's real index to match the new HEAD for
