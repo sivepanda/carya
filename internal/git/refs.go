@@ -242,6 +242,46 @@ func (r *RefManager) DeleteUserTreeRef(userID string) error {
 	return nil
 }
 
+// StateRef is one ref holding a published state: a local ref, or the copy
+// fetched from the team remote.
+type StateRef struct {
+	Ref    string
+	Remote bool
+	UserRef
+}
+
+// ListStateRefs lists every state ref, local and fetched, without merging a
+// user's local and remote copies the way ListUserRefs does.
+func (r *RefManager) ListStateRefs() ([]StateRef, error) {
+	var out []StateRef
+	for _, source := range []struct {
+		prefix string
+		remote bool
+	}{
+		{LocalUserRefsPrefix(), false},
+		{RemoteUserRefsPrefix(defaultTeamRemote), true},
+	} {
+		cmd := exec.Command("git", "for-each-ref", "--format=%(refname)", source.prefix)
+		cmd.Dir = r.repoPath
+		output, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("list %s: %w", source.prefix, err)
+		}
+		for _, refPath := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+			userID := strings.TrimSuffix(strings.TrimPrefix(refPath, source.prefix), "/tree")
+			if refPath == "" || userID == "" || strings.Contains(userID, "/") {
+				continue
+			}
+			ref, err := r.readUserRef(userID, refPath)
+			if err != nil {
+				continue
+			}
+			out = append(out, StateRef{Ref: refPath, Remote: source.remote, UserRef: ref})
+		}
+	}
+	return out, nil
+}
+
 // ListUserRefs returns all user refs in the repository.
 func (r *RefManager) ListUserRefs() ([]UserRef, error) {
 	type refSource struct {
@@ -356,7 +396,7 @@ func (r *RefManager) FetchCaryaRefs(remote string) error {
 		return fmt.Errorf("remote '%s' not found", remote)
 	}
 
-	cmd := exec.Command("git", "fetch", remote, "+refs/carya/*:refs/remotes/"+remote+"/carya/*")
+	cmd := exec.Command("git", "fetch", "--prune", remote, "+refs/carya/*:refs/remotes/"+remote+"/carya/*")
 	cmd.Dir = r.repoPath
 
 	if output, err := cmd.CombinedOutput(); err != nil {
