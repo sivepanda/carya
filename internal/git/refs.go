@@ -291,6 +291,13 @@ func (r *RefManager) GetBaseRef() (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
+// HasRemote reports whether the repository has a remote with this name.
+func (r *RefManager) HasRemote(remote string) bool {
+	cmd := exec.Command("git", "remote", "get-url", remote)
+	cmd.Dir = r.repoPath
+	return cmd.Run() == nil
+}
+
 // FetchCaryaRefs fetches all carya refs from a remote.
 func (r *RefManager) FetchCaryaRefs(remote string) error {
 	// Verify the remote exists before attempting to fetch

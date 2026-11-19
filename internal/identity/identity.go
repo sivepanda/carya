@@ -47,6 +47,21 @@ const AgentEnvVar = "CARYA_AGENT"
 //     and device, salted if another worktree or a published state already
 //     uses it
 func (u *UserIdentity) GetOrCreate() (string, error) {
+	return u.getOrCreate(agentFromEnv())
+}
+
+// GetOrCreateAgent is GetOrCreate for a checkout known to be driven by an
+// agent, such as from a harness hook. CARYA_AGENT, when set, still names the
+// agent; otherwise agent does. An existing identity is never replaced.
+func (u *UserIdentity) GetOrCreateAgent(agent string) (string, error) {
+	name := agentFromEnv()
+	if name == "" {
+		name = sanitizeAgentName(agent)
+	}
+	return u.getOrCreate(name)
+}
+
+func (u *UserIdentity) getOrCreate(agent string) (string, error) {
 	// Try existing file first
 	if data, err := os.ReadFile(u.idPath); err == nil {
 		id := strings.TrimSpace(string(data))
@@ -57,7 +72,7 @@ func (u *UserIdentity) GetOrCreate() (string, error) {
 
 	var userID string
 	var err error
-	if agent := agentFromEnv(); agent != "" {
+	if agent != "" {
 		userID, err = u.generateAgentID(agent)
 	} else {
 		username := u.defaultUserIDSource()
@@ -136,7 +151,11 @@ func (u *UserIdentity) Exists() bool {
 // agentFromEnv returns the sanitized agent name from CARYA_AGENT, short
 // enough that "<agent>-<suffix>" stays a valid user ID.
 func agentFromEnv() string {
-	agent := sanitizeUserID(os.Getenv(AgentEnvVar))
+	return sanitizeAgentName(os.Getenv(AgentEnvVar))
+}
+
+func sanitizeAgentName(name string) string {
+	agent := sanitizeUserID(name)
 	if len(agent) > 24 {
 		agent = strings.Trim(agent[:24], "-_")
 	}

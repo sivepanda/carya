@@ -23,9 +23,14 @@ func New() (*Repository, error) {
 		log.Printf("Failed to get working directory: %v", err)
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
+	return NewAt(wd)
+}
 
+// NewAt creates a repository instance for the checkout containing dir. In a
+// linked worktree that is the worktree, which has its own .carya.
+func NewAt(dir string) (*Repository, error) {
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	cmd.Dir = wd
+	cmd.Dir = dir
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("not inside a git repository (run 'git init' first): %w", err)
@@ -91,6 +96,47 @@ func (r *Repository) ShadowPath() string {
 // UserIDPath returns the path to the user identity file
 func (r *Repository) UserIDPath() string {
 	return filepath.Join(r.caryaPath, "user-id")
+}
+
+// EnsureLocallyIgnored keeps .carya/ out of git without touching any tracked
+// file: if nothing ignores it yet, it is added to the repository's
+// info/exclude, which every worktree of the repository shares.
+func (r *Repository) EnsureLocallyIgnored() error {
+	check := exec.Command("git", "check-ignore", "-q", "--no-index", ".carya/user-id")
+	check.Dir = r.rootPath
+	if check.Run() == nil {
+		return nil
+	}
+
+	cmd := exec.Command("git", "rev-parse", "--git-common-dir")
+	cmd.Dir = r.rootPath
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("locate git dir: %w", err)
+	}
+	commonDir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(r.rootPath, commonDir)
+	}
+	excludePath := filepath.Join(commonDir, "info", "exclude")
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0755); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(excludePath), err)
+	}
+
+	existing, _ := os.ReadFile(excludePath)
+	entry := ".carya/\n"
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		entry = "\n" + entry
+	}
+	f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", excludePath, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(entry); err != nil {
+		return fmt.Errorf("write %s: %w", excludePath, err)
+	}
+	return nil
 }
 
 // EnsureGitignore ensures .carya/ is listed in the .gitignore file.
