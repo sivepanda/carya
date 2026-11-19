@@ -120,9 +120,13 @@ func (e *Engine) TrackedPaths(dir string) []string {
 // the daemon started (at init, or before a restart).
 //
 // shouldTrack applies the watcher's filters so startup tracks exactly what the
-// watcher would. Files that already have stored chunks are assumed to be
-// covered by them, so only their index entry is aligned; files without chunks
-// are fed through the chunk pipeline so their changes can be composed.
+// watcher would. Every changed file is fed through the chunk pipeline so its
+// changes can be composed. Files without chunks are diffed against HEAD. A
+// file with stored chunks is diffed against the top of its chunk stack (HEAD
+// plus the chunks sync would keep), so edits made while the daemon was down
+// become a chunk of their own that stacks on the existing ones, and the next
+// chunk does too. When that stack no longer applies, the file's chunks are
+// assumed to cover it and only its index entry is aligned with disk.
 func (e *Engine) ReconcileWorkingTree(repoRoot string, shouldTrack func(relPath string) bool) error {
 	if e.shadow == nil {
 		return nil
@@ -133,7 +137,7 @@ func (e *Engine) ReconcileWorkingTree(repoRoot string, shouldTrack func(relPath 
 		return err
 	}
 
-	chunked, aligned := 0, 0
+	chunked, stacked, aligned := 0, 0, 0
 	for _, rel := range paths {
 		if shouldTrack != nil && !shouldTrack(rel) {
 			continue
@@ -161,6 +165,22 @@ func (e *Engine) ReconcileWorkingTree(repoRoot string, shouldTrack func(relPath 
 			continue
 		}
 
+		if tip, ok := chunk.StackTip(repoRoot, rel, existing); ok {
+			if tip.Exists {
+				err = e.shadow.UpdateIndex(rel, tip.Blob, "100644")
+			} else {
+				err = e.shadow.RemoveFromIndex(rel)
+			}
+			if err == nil {
+				// Records whatever disk has beyond the stack's top, if
+				// anything, as a new chunk on top of it.
+				e.OnFileChange(rel, contents)
+				stacked++
+				continue
+			}
+			log.Printf("Reconcile: could not move shadow index to the chunk stack for %s: %v", rel, err)
+		}
+
 		if contents == nil {
 			err = e.shadow.RemoveFromIndex(rel)
 		} else {
@@ -176,8 +196,8 @@ func (e *Engine) ReconcileWorkingTree(repoRoot string, shouldTrack func(relPath 
 		aligned++
 	}
 
-	if chunked+aligned > 0 {
-		log.Printf("Reconciled working tree: %d new change(s) tracked, %d already-chunked file(s) aligned", chunked, aligned)
+	if chunked+stacked+aligned > 0 {
+		log.Printf("Reconciled working tree: %d new change(s) tracked, %d already-chunked file(s) checked on top of their chunks, %d aligned", chunked, stacked, aligned)
 	}
 	return nil
 }

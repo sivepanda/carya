@@ -344,3 +344,70 @@ func TestDecideRetentionAllStackedChunks(t *testing.T) {
 		})
 	})
 }
+
+// checkTip fails unless StackTip finds path's tip and it holds want.
+func checkTip(t *testing.T, repo, path string, chunks []Chunk, want string) {
+	t.Helper()
+	tip, ok := StackTip(repo, path, chunks)
+	if !ok || !tip.Exists {
+		t.Fatalf("StackTip(%s) = %+v, ok=%v; want a tip holding %q", path, tip, ok, want)
+	}
+	if got := gitRun(t, repo, "cat-file", "-p", tip.Blob); got != want {
+		t.Fatalf("tip of %s = %q, want %q", path, got, want)
+	}
+}
+
+func TestStackTip(t *testing.T) {
+	start := time.Now()
+
+	t.Run("kept stack", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase, "other.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, stackVersions...)
+		o := recordStack(t, repo, "other.txt", start, stackVersions[0])
+		checkTip(t, repo, "file.txt", append(newestFirst(s...), o...), stackVersions[2])
+
+		// Neither the repository's index nor its working tree is touched.
+		if status := gitRun(t, repo, "status", "--porcelain"); status != "" {
+			t.Fatalf("repository changed:\n%s", status)
+		}
+	})
+
+	t.Run("committed bottom chunk is left out", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, stackVersions...)
+		writeRepoFile(t, repo, "file.txt", stackVersions[0])
+		commitAll(t, repo, "first chunk")
+		checkTip(t, repo, "file.txt", newestFirst(s...), stackVersions[2])
+	})
+
+	t.Run("landed stack has HEAD as its tip", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, stackVersions[:2]...)
+		writeRepoFile(t, repo, "file.txt", stackVersions[1])
+		commitAll(t, repo, "both chunks")
+		checkTip(t, repo, "file.txt", newestFirst(s...), stackVersions[1])
+	})
+
+	t.Run("deleting chunk leaves no file", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase, "keep.txt": "keep\n"})
+		os.Remove(filepath.Join(repo, "file.txt"))
+		del := Chunk{ID: "del", FilePath: "file.txt", Diff: gitRun(t, repo, "diff", "--", "file.txt"), StartTime: start}
+		gitRun(t, repo, "checkout", "--", "file.txt")
+
+		tip, ok := StackTip(repo, "file.txt", []Chunk{del})
+		if !ok || tip.Exists {
+			t.Fatalf("StackTip = %+v, ok=%v; want ok with no file", tip, ok)
+		}
+	})
+
+	t.Run("stale stack has no tip", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		s := recordStack(t, repo, "file.txt", start, stackVersions[:2]...)
+		writeRepoFile(t, repo, "file.txt", "uno\ndos\ntres\n")
+		commitAll(t, repo, "rewrite")
+
+		if tip, ok := StackTip(repo, "file.txt", newestFirst(s...)); ok {
+			t.Fatalf("StackTip = %+v, want no tip for a stale stack", tip)
+		}
+	})
+}

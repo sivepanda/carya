@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"carya/internal/chunk"
+	"carya/internal/patch"
 	"carya/internal/store"
 )
 
@@ -129,5 +130,114 @@ func TestReconcileWorkingTreeAtStartup(t *testing.T) {
 		if len(got) != want {
 			t.Errorf("chunks for %s = %d, want %d", path, len(got), want)
 		}
+	}
+}
+
+// applyToHEAD applies patchText to a temporary index seeded from HEAD and
+// returns path's content there, as compose would commit it.
+func applyToHEAD(t *testing.T, root, patchText, path string) string {
+	t.Helper()
+	env := append(os.Environ(), "GIT_INDEX_FILE="+filepath.Join(t.TempDir(), "index"))
+	run := func(stdin string, args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = env
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	run("", "read-tree", "HEAD")
+	run(patchText, "apply", "--cached", "-")
+	return run("", "show", ":"+path)
+}
+
+func TestReconcileWorkingTreeChunksEditsMadeWhileStopped(t *testing.T) {
+	// Keep the engine away from the developer's real global config.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	root := t.TempDir()
+	gitRun(t, root, "init", "-q")
+	writeFile(t, root, ".gitignore", ".carya/\n")
+	writeFile(t, root, "file.txt", "one\ntwo\nthree\n")
+	gitRun(t, root, "add", "-A")
+	gitRun(t, root, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "base")
+
+	caryaPath := filepath.Join(root, ".carya")
+	if err := os.MkdirAll(caryaPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(caryaPath, "chunks.db")
+
+	// Each version touches a line next to the previous change, so every
+	// later chunk's hunk context includes the earlier chunk's result.
+	const (
+		recorded = "one\nTWO\nthree\n" // saved while the daemon runs
+		offline  = "one\nTWO\nTHREE\n" // saved while it is stopped
+		later    = "ONE\nTWO\nTHREE\n" // saved after it restarts
+	)
+
+	first, err := NewEngineWithShadow(dbPath, root, caryaPath)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	writeFile(t, root, "file.txt", recorded)
+	first.OnFileChange("file.txt", []byte(recorded))
+	if err := first.ForceFlush("file.txt"); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	first.Stop()
+
+	writeFile(t, root, "file.txt", offline)
+
+	// The restarted daemon seeds its shadow index from HEAD again.
+	e, err := NewEngineWithShadow(dbPath, root, caryaPath)
+	if err != nil {
+		t.Fatalf("restart engine: %v", err)
+	}
+	defer e.Stop()
+	if err := e.ReconcileWorkingTree(root, nil); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if err := e.FlushAll(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	writeFile(t, root, "file.txt", later)
+	e.OnFileChange("file.txt", []byte(later))
+	if err := e.ForceFlush("file.txt"); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	st, err := store.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	chunks, err := st.FindChunks("file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The offline edit is a chunk of its own, between the other two.
+	if len(chunks) != 3 {
+		t.Fatalf("chunks for file.txt = %d, want 3 (recorded, offline, later)", len(chunks))
+	}
+	for i, r := range chunk.DecideRetentionAll(root, chunks) {
+		if r.Decision != chunk.DecisionKeep {
+			t.Errorf("chunk %s: %s (%s), want keep\n%s", chunks[i].ID, r.Decision, r.Reason, chunks[i].Diff)
+		}
+	}
+
+	// Composing the whole stack reproduces the file on disk.
+	all := make(map[int]bool)
+	for i := range chunks {
+		all[i] = true
+	}
+	if got := applyToHEAD(t, root, patch.CreateFromChunks(chunks, all).Patch, "file.txt"); got != later {
+		t.Fatalf("composed file.txt = %q, want %q", got, later)
 	}
 }

@@ -91,11 +91,74 @@ func DecideRetentionAll(repoPath string, chunks []Chunk) []Retention {
 			if applied {
 				out[i] = Retention{DecisionKeep, "still applicable"}
 			} else {
-				out[i] = Retention{DecisionPrune, "no longer matches"}
+				out[i] = Retention{DecisionPrune, reasonNoLongerMatches}
 			}
 		}
 	}
 	return out
+}
+
+const reasonNoLongerMatches = "no longer matches"
+
+// Tip is a file's content at the top of its chunk stack.
+type Tip struct {
+	Exists bool   // false when the stack leaves the file deleted or absent
+	Blob   string // the file's blob hash, when it exists
+}
+
+// StackTip returns path as it stands once its kept chunks (the ones
+// DecideRetentionAll keeps) are applied on top of HEAD in recording order.
+// That is the version the next chunk of path has to be diffed against for it
+// to stack on the existing ones. chunks may include other files' chunks,
+// which are ignored. The tip is computed on a temporary index, so neither the
+// repository's index nor HEAD is touched; its blob is written to the
+// repository's object store.
+//
+// A file whose chunks have all landed in HEAD (or upstream) has HEAD's
+// version as its tip. ok is false when there is no stack to build on: the
+// file has chunks still to be committed but none of them applies any more
+// (the stack is stale), it has a binary chunk, whose change cannot be
+// applied, or git failed.
+func StackTip(repoPath, path string, chunks []Chunk) (tip Tip, ok bool) {
+	var stack []Chunk
+	for _, c := range chunks {
+		if c.FilePath != path {
+			continue
+		}
+		if isBinaryPatch(strings.TrimSpace(c.Diff)) {
+			return Tip{}, false
+		}
+		stack = append(stack, c)
+	}
+	sort.SliceStable(stack, func(a, b int) bool { return RecordedBefore(stack[a], stack[b]) })
+
+	idx, err := newScratchIndex(repoPath, "HEAD")
+	if err != nil {
+		return Tip{}, false
+	}
+	defer idx.remove()
+
+	kept, stale := 0, 0
+	for k, r := range DecideRetentionAll(repoPath, stack) {
+		switch {
+		case r.Decision == DecisionKeep:
+			if !idx.apply(stack[k].Diff, false) {
+				return Tip{}, false
+			}
+			kept++
+		case r.Reason == reasonNoLongerMatches:
+			stale++
+		}
+	}
+	if stale > 0 && kept == 0 {
+		return Tip{}, false
+	}
+
+	blob, exists, err := idx.entry(path)
+	if err != nil {
+		return Tip{}, false
+	}
+	return Tip{Exists: exists, Blob: blob}, true
 }
 
 // AppliedAtHEAD reports whether HEAD already contains a single chunk's change.
@@ -265,6 +328,28 @@ func (x *scratchIndex) apply(patch string, reverse bool) bool {
 	cmd.Env = x.env
 	cmd.Stdin = strings.NewReader(patch)
 	return cmd.Run() == nil
+}
+
+// entry returns path's blob hash in the index, and whether it is there.
+func (x *scratchIndex) entry(path string) (blob string, exists bool, err error) {
+	cmd := exec.Command("git", "ls-files", "--cached", "-s", "-z", "--", ":(top,literal)"+path)
+	cmd.Dir = x.repoPath
+	cmd.Env = x.env
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false, err
+	}
+	// format: <mode> <hash> <stage>\t<path>\0
+	for record := range strings.SplitSeq(string(out), "\x00") {
+		meta, entryPath, found := strings.Cut(record, "\t")
+		if !found || entryPath != path {
+			continue
+		}
+		if fields := strings.Fields(meta); len(fields) >= 2 {
+			return fields[1], true, nil
+		}
+	}
+	return "", false, nil
 }
 
 func (x *scratchIndex) remove() {
