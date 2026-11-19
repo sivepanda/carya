@@ -219,8 +219,8 @@ func isCaryaHook(h map[string]any) bool {
 	return filepath.Base(first) == "carya" && strings.HasPrefix(strings.TrimSpace(rest), "hook claude ")
 }
 
-// firstShellWord splits off the first word of a command, unquoting a word
-// written by shellQuote (single quotes, with '\” for a quote).
+// firstShellWord splits off the first word of a command, undoing shellQuote's
+// single-quoting (including its escaped embedded quotes).
 func firstShellWord(command string) (word, rest string) {
 	if !strings.HasPrefix(command, "'") {
 		word, rest, _ = strings.Cut(command, " ")
