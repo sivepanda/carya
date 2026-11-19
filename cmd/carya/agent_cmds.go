@@ -13,6 +13,7 @@ import (
 	"carya/internal/agent"
 	"carya/internal/harness"
 	"carya/internal/peers"
+	"carya/internal/repository"
 
 	"github.com/spf13/cobra"
 )
@@ -53,6 +54,9 @@ type harnessSetup struct {
 	remove  func(path string) (bool, error)
 	// excludes lists paths to keep out of git through info/exclude.
 	excludes func(scope string) []string
+	// mainCheckout means the harness reads repository-level config only from
+	// the main worktree, so setup run in a linked worktree installs there.
+	mainCheckout bool
 	// next is printed after a successful install.
 	next string
 }
@@ -88,9 +92,10 @@ changing, the change is added to its context.`,
 reads a worktree's hooks from the main checkout, so worktrees are covered.
 Before Codex applies a patch to a file another agent is changing, the change
 is added to its context.`,
-		path:    harness.CodexHooksPath,
-		install: harness.InstallCodexHooks,
-		remove:  harness.RemoveCodexHooks,
+		path:         harness.CodexHooksPath,
+		install:      harness.InstallCodexHooks,
+		remove:       harness.RemoveCodexHooks,
+		mainCheckout: true,
 		excludes: func(scope string) []string {
 			if scope == harness.ScopeLocal {
 				return []string{".codex/hooks.json"}
@@ -136,7 +141,7 @@ func newSetupCmd(h harnessSetup) *cobra.Command {
 				fail(err)
 			}
 			repo := mustRepo()
-			path, err := h.path(setupScope, repo.RootPath())
+			path, notes, err := setupTarget(h, setupScope, repo)
 			if err != nil {
 				fail(err)
 			}
@@ -184,12 +189,44 @@ func newSetupCmd(h harnessSetup) *cobra.Command {
 			} else {
 				fmt.Printf("States stay on this machine: %s.\n", why)
 			}
+			for _, note := range notes {
+				fmt.Println(note)
+			}
 			if warning != "" {
 				fmt.Fprintln(os.Stderr, "Warning: "+warning)
 			}
 			fmt.Println(h.next)
 		},
 	}
+}
+
+// setupTarget returns the file setup writes for h in scope, and notes to
+// print about why it is there. A harness that reads repository config only
+// from the main worktree (Codex) gets its file in the main checkout even when
+// setup runs in a linked worktree; the file then covers every worktree.
+func setupTarget(h harnessSetup, scope string, repo *repository.Repository) (string, []string, error) {
+	root := repo.RootPath()
+	var notes []string
+	if h.mainCheckout && scope != harness.ScopeUser {
+		if main := repo.MainWorktreeRoot(); main != root {
+			root = main
+			path, err := h.path(scope, root)
+			if err != nil {
+				return "", nil, err
+			}
+			notes = append(notes, fmt.Sprintf("This is a linked worktree. %s reads repository %s only from the main checkout, so they go in %s and cover every worktree.", h.display, h.what, path))
+			if scope == harness.ScopeProject {
+				branch := repository.BranchAt(main)
+				if branch == "" {
+					branch = "whatever is checked out there"
+				}
+				notes = append(notes, fmt.Sprintf("Commit it on the branch checked out in the main checkout (%s): %s reads it there, not from this worktree's branch.", branch, h.display))
+			}
+			return path, notes, nil
+		}
+	}
+	path, err := h.path(scope, root)
+	return path, notes, err
 }
 
 // hookCommand picks how hooks should invoke Carya. A committed settings file

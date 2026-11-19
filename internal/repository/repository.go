@@ -98,6 +98,45 @@ func (r *Repository) UserIDPath() string {
 	return filepath.Join(r.caryaPath, "user-id")
 }
 
+// MainWorktreeRoot returns the root of the repository's main worktree: this
+// checkout's root unless it is a linked worktree. A bare repository has no
+// main worktree, so this checkout's root is returned then too.
+func (r *Repository) MainWorktreeRoot() string {
+	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	cmd.Dir = r.rootPath
+	out, err := cmd.Output()
+	if err != nil {
+		return r.rootPath
+	}
+	// The first block describes the main worktree.
+	first, _, _ := strings.Cut(string(out), "\n\n")
+	var main string
+	for _, line := range strings.Split(first, "\n") {
+		if line == "bare" {
+			return r.rootPath
+		}
+		if p, ok := strings.CutPrefix(line, "worktree "); ok {
+			main = p
+		}
+	}
+	if main == "" {
+		return r.rootPath
+	}
+	return main
+}
+
+// BranchAt returns the branch checked out in the worktree at dir, or "" when
+// HEAD is detached.
+func BranchAt(dir string) string {
+	cmd := exec.Command("git", "symbolic-ref", "--quiet", "--short", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // EnsureLocallyIgnored keeps .carya/ out of git without touching any tracked
 // file: if nothing ignores it yet, it is added to the repository's
 // info/exclude, which every worktree of the repository shares.
