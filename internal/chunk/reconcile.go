@@ -444,9 +444,12 @@ func newScratchIndex(repoPath, ref string) (*scratchIndex, error) {
 }
 
 // apply applies patch to the index, in reverse if asked. git apply is atomic,
-// so a patch that does not apply cleanly leaves the index unchanged.
+// so a patch that does not apply cleanly leaves the index unchanged. It
+// applies the patch as it is, whatever apply.whitespace says: =error would
+// refuse a patch that adds (or, in reverse, removes) trailing blanks, and
+// =fix would leave the index different from what was committed.
 func (x *scratchIndex) apply(patch string, reverse bool) bool {
-	args := []string{"apply", "--cached"}
+	args := []string{"apply", "--cached", "--whitespace=nowarn"}
 	if reverse {
 		args = append(args, "--reverse")
 	}

@@ -80,8 +80,10 @@ func CheckApply(repoPath, patch string) error {
 	})
 }
 
+// runApply applies patch with git apply exactly as it is: apply.whitespace=fix
+// would otherwise change what is committed, and =error refuse it.
 func runApply(repoPath string, env, args []string, patch string) error {
-	applyArgs := append([]string{"apply"}, args...)
+	applyArgs := append([]string{"apply", "--whitespace=nowarn"}, args...)
 	applyCmd := exec.Command("git", applyArgs...)
 	applyCmd.Dir = repoPath
 	applyCmd.Env = env
