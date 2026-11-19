@@ -46,15 +46,24 @@ func List(repoRoot string) ([]Hunk, error) {
 	if err != nil {
 		return nil, err
 	}
-	base := "4b825dc642cb6eb9a060e54bf8d69288fbee4904" // the empty tree
-	if head, err := run(repoRoot, "rev-parse", "--verify", "--quiet", "HEAD^{tree}"); err == nil {
-		base = strings.TrimSpace(head)
+	base, err := run(repoRoot, "rev-parse", "--verify", "--quiet", "HEAD^{tree}")
+	if err != nil {
+		if base, err = emptyTree(repoRoot); err != nil {
+			return nil, err
+		}
 	}
-	diff, err := run(repoRoot, "-c", "core.quotePath=false", "diff-tree", "-p", "--binary", "--no-renames", "--full-index", "--no-color", base, tree)
+	diff, err := run(repoRoot, "-c", "core.quotePath=false", "diff-tree", "-p", "--binary", "--no-renames", "--full-index", "--no-color", strings.TrimSpace(base), tree)
 	if err != nil {
 		return nil, fmt.Errorf("diff working tree: %w", err)
 	}
 	return parse(diff)
+}
+
+// emptyTree returns the ID of the empty tree, which differs between SHA-1
+// and SHA-256 repositories.
+func emptyTree(repoRoot string) (string, error) {
+	out, err := run(repoRoot, "hash-object", "-t", "tree", "--stdin")
+	return strings.TrimSpace(out), err
 }
 
 var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)

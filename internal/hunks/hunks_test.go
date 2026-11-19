@@ -880,6 +880,27 @@ func TestCommitInRepositoryWithoutCommits(t *testing.T) {
 	}
 }
 
+// The empty tree has a different ID under SHA-256.
+func TestCommitInSHA256RepositoryWithoutCommits(t *testing.T) {
+	r := &testRepo{t: t, dir: t.TempDir()}
+	if _, err := r.tryGit("init", "-q", "-b", "main", "--object-format=sha256"); err != nil {
+		t.Skipf("git cannot make SHA-256 repositories: %v", err)
+	}
+	r.write("a.txt", "a\n")
+	r.write("b.txt", "b\n")
+
+	if hs := r.list(); len(hs) != 2 || hs[0].Kind != "add" || hs[1].Kind != "add" {
+		t.Fatalf("hunks: %+v", hs)
+	}
+	r.commit("first", "a.txt")
+	if got := r.git("ls-tree", "--name-only", "HEAD"); got != "a.txt\n" {
+		t.Errorf("first commit has %q", got)
+	}
+	if s := r.status(); s != "?? b.txt\n" {
+		t.Errorf("status:\n%s", s)
+	}
+}
+
 func TestCommitRefusals(t *testing.T) {
 	r := threeHunkRepo(t)
 	hs := r.list()
