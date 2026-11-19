@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 )
 
@@ -14,21 +15,33 @@ type Result struct {
 	Warnings []string
 }
 
+// CreateFromChunks joins the selected chunks' diffs into one patch, in the
+// order the chunks were recorded: a file's later chunks are diffed on top of
+// its earlier ones, and git apply takes a file's diffs in sequence.
 func CreateFromChunks(chunks []chunk.Chunk, selectedIndices map[int]bool) Result {
 	var patches []string
 	var warnings []string
 
-	for i, c := range chunks {
-		if selected, ok := selectedIndices[i]; ok && selected {
-			cleanDiff, diffWarnings := CleanupDiffForGit(c)
-			if len(diffWarnings) > 0 {
-				for _, w := range diffWarnings {
-					warnings = append(warnings, fmt.Sprintf("%s: %s", c.FilePath, w))
-				}
+	var order []int
+	for i := range chunks {
+		if selectedIndices[i] {
+			order = append(order, i)
+		}
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		return chunk.RecordedBefore(chunks[order[a]], chunks[order[b]])
+	})
+
+	for _, i := range order {
+		c := chunks[i]
+		cleanDiff, diffWarnings := CleanupDiffForGit(c)
+		if len(diffWarnings) > 0 {
+			for _, w := range diffWarnings {
+				warnings = append(warnings, fmt.Sprintf("%s: %s", c.FilePath, w))
 			}
-			if cleanDiff != "" {
-				patches = append(patches, cleanDiff)
-			}
+		}
+		if cleanDiff != "" {
+			patches = append(patches, cleanDiff)
 		}
 	}
 

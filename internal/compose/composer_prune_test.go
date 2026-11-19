@@ -82,3 +82,129 @@ func TestCommitPrunesOnlyTheChunksItCommitted(t *testing.T) {
 		t.Fatalf("expected the commit to exist, log:\n%s", log)
 	}
 }
+
+// stackRepo commits path at base, then returns one diff per version, each
+// against the version before it, as the daemon records stacked chunks. The
+// working tree is left at the last version with nothing staged.
+func stackRepo(t *testing.T, path, base string, versions ...string) (string, []string) {
+	t.Helper()
+	for k, v := range map[string]string{
+		"GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.com",
+		"GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@example.com",
+	} {
+		t.Setenv(k, v)
+	}
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-q")
+	os.WriteFile(filepath.Join(repo, path), []byte(base), 0644)
+	os.WriteFile(filepath.Join(repo, "other.txt"), []byte("other\n"), 0644)
+	gitRun(t, repo, "add", "-A")
+	gitRun(t, repo, "commit", "-q", "-m", "base")
+
+	var diffs []string
+	for _, v := range versions {
+		os.WriteFile(filepath.Join(repo, path), []byte(v), 0644)
+		diffs = append(diffs, gitRun(t, repo, "diff", "--", path))
+		gitRun(t, repo, "add", path)
+	}
+	gitRun(t, repo, "reset", "-q")
+	return repo, diffs
+}
+
+func saveChunks(t *testing.T, chunks ...chunk.Chunk) *store.SQLiteStore {
+	t.Helper()
+	st, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "chunks.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	for _, c := range chunks {
+		if err := st.SaveChunk(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return st
+}
+
+// The second chunk rewrites the first one's line, so it only applies on top
+// of it, and the first no longer reverse-applies to the commit on its own.
+var stackedVersions = []string{"one\nTWO\nthree\n", "one\nTWO!\nthree\n"}
+
+func TestCommitStackedChunksTogether(t *testing.T) {
+	repo, diffs := stackRepo(t, "file.txt", "one\ntwo\nthree\n", stackedVersions...)
+	now := time.Now()
+	st := saveChunks(t,
+		chunk.Chunk{ID: "a", FilePath: "file.txt", Diff: diffs[0], StartTime: now, EndTime: now, Hash: "a"},
+		chunk.Chunk{ID: "b", FilePath: "file.txt", Diff: diffs[1], StartTime: now.Add(time.Second), EndTime: now.Add(time.Second), Hash: "b"},
+	)
+
+	c, err := New(st, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range c.Chunks() {
+		c.SetSelected(i, true)
+	}
+	res, err := c.CreateCommit("stack")
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if res.Warning != nil || res.ApplyConflict != nil {
+		t.Fatalf("expected a plain commit, got warning=%v conflict=%v", res.Warning, res.ApplyConflict)
+	}
+
+	if got := gitRun(t, repo, "show", "HEAD:file.txt"); got != stackedVersions[1] {
+		t.Fatalf("committed file.txt = %q, want %q", got, stackedVersions[1])
+	}
+	if got, _ := st.FindChunks("file.txt"); len(got) != 0 {
+		t.Fatalf("both committed chunks should be pruned, still have %d", len(got))
+	}
+}
+
+func TestApplyConflictKeepsStackApplicable(t *testing.T) {
+	repo, diffs := stackRepo(t, "file.txt", "one\ntwo\nthree\n", stackedVersions...)
+	stale := "diff --git a/other.txt b/other.txt\n--- a/other.txt\n+++ b/other.txt\n@@ -1 +1 @@\n-nope\n+still-nope\n"
+	now := time.Now()
+	st := saveChunks(t,
+		chunk.Chunk{ID: "a", FilePath: "file.txt", Diff: diffs[0], StartTime: now, EndTime: now, Hash: "a"},
+		chunk.Chunk{ID: "stale", FilePath: "other.txt", Diff: stale, StartTime: now.Add(500 * time.Millisecond), EndTime: now.Add(500 * time.Millisecond), Hash: "s"},
+		chunk.Chunk{ID: "b", FilePath: "file.txt", Diff: diffs[1], StartTime: now.Add(time.Second), EndTime: now.Add(time.Second), Hash: "b"},
+	)
+
+	c, err := New(st, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range c.Chunks() {
+		c.SetSelected(i, true)
+	}
+	res, err := c.CreateCommit("stack")
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	conflict := res.ApplyConflict
+	if conflict == nil {
+		t.Fatal("expected an apply conflict for the stale chunk")
+	}
+	for i, ch := range c.Chunks() {
+		if want := ch.FilePath == "file.txt"; conflict.Applicable[i] != want {
+			t.Errorf("chunk %s applicable = %v, want %v", ch.ID, conflict.Applicable[i], want)
+		}
+	}
+	if len(conflict.Skipped) != 1 || conflict.Skipped[0] != "other.txt (no longer matches)" {
+		t.Fatalf("skipped = %q, want only the stale other.txt chunk", conflict.Skipped)
+	}
+
+	if _, err := c.ApplyApplicableCommit(conflict.Applicable, conflict.CommitMsg); err != nil {
+		t.Fatalf("commit applicable: %v", err)
+	}
+	if got := gitRun(t, repo, "show", "HEAD:file.txt"); got != stackedVersions[1] {
+		t.Fatalf("committed file.txt = %q, want %q", got, stackedVersions[1])
+	}
+	if got, _ := st.FindChunks("file.txt"); len(got) != 0 {
+		t.Fatalf("committed stack should be pruned, still have %d", len(got))
+	}
+	if got, _ := st.FindChunks("other.txt"); len(got) != 1 {
+		t.Fatalf("skipped chunk should be kept, have %d", len(got))
+	}
+}
