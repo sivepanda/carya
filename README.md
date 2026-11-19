@@ -28,6 +28,19 @@ Use `carya publish` to share your state, `carya team` to see teammates, and `car
 
 **Note:** This feature works best with small teams. It can get noisy for large teams.
 
+### Coding Agents
+Run several coding agents on one repository without them stepping on each other. Each agent's checkout (a clone or a worktree) gets its own identity and publishes what it has on disk after every tool call, shell commands included. Before an agent edits a file another agent is changing, Carya adds that agent's change to its context, and says whether the two would conflict.
+
+Set it up for Claude Code with one command, no prompts:
+
+```bash
+carya setup claude
+```
+
+This writes Carya's hooks into `.claude/settings.local.json` and keeps `.carya/` out of git through `.git/info/exclude`, so no tracked file changes. Use `--scope project` to commit the hooks for everyone, or `--scope user` to install them once for every repository you run setup in. `carya setup claude --remove` takes them out again.
+
+Use `carya check <file>` to see other agents' unfinished changes to a file yourself. Agents in worktrees of the same repository see each other with no network; with an `origin` remote, states are also pushed to `refs/carya/*`, which does not show up as branches on GitHub. Cloud sessions don't share state yet.
+
 ## Planned Components
 ### Synchronous Development & Environment Sharing
 Creates a shell of a host user's environment and recreates it on the client, while also streaming files between users, enabling a faster, more localized synchronous development pathway.
