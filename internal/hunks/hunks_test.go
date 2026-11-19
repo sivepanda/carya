@@ -792,6 +792,105 @@ func TestCommitKeepsOtherStagedChanges(t *testing.T) {
 	}
 }
 
+func TestCommitKeepsStagedHunkOfTheSameFile(t *testing.T) {
+	t.Run("other hunk staged", func(t *testing.T) {
+		r := threeHunkRepo(t)
+		hs := r.list()
+		// Stage the first hunk, as `git add -p` would.
+		cmd := exec.Command("git", "apply", "--cached", "-")
+		cmd.Dir = r.dir
+		cmd.Stdin = strings.NewReader(Patch(hs[:1]))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("stage first hunk: %v\n%s", err, out)
+		}
+
+		r.commit("last hunk", hs[2].ID)
+		if got, want := r.blob("HEAD", "f.txt"), edited(30, subset(27)); got != want {
+			t.Errorf("f.txt in HEAD:\n%s", got)
+		}
+		// The index still has the staged hunk, and has the committed one too
+		// rather than undoing it.
+		if got, want := r.blob("", "f.txt"), edited(30, subset(3, 27)); got != want {
+			t.Errorf("f.txt in the index:\n%s\nwant:\n%s", got, want)
+		}
+	})
+	t.Run("whole file staged", func(t *testing.T) {
+		r := threeHunkRepo(t)
+		hs := r.list()
+		r.git("add", "f.txt")
+
+		r.commit("middle hunk", hs[1].ID)
+		if got := r.blob("", "f.txt"); got != r.read("f.txt") {
+			t.Errorf("f.txt in the index:\n%s", got)
+		}
+		if s := r.status(); s != "M  f.txt\n" {
+			t.Errorf("status:\n%s", s)
+		}
+	})
+	t.Run("staged version overlaps", func(t *testing.T) {
+		r := threeHunkRepo(t)
+		r.write("f.txt", edited(30, map[int][]string{3: {"staged 3"}}))
+		r.git("add", "f.txt")
+		staged := r.blob("", "f.txt")
+		r.write("f.txt", edited(30, threeEdits))
+		hs := r.list()
+
+		// The staged line 3 conflicts with the committed one: leave the
+		// user's staged version as it is.
+		r.commit("first hunk", hs[0].ID)
+		if got := r.blob("", "f.txt"); got != staged {
+			t.Errorf("f.txt in the index:\n%s\nwant:\n%s", got, staged)
+		}
+	})
+}
+
+// A file named like a glob must not be treated as a pathspec that also
+// matches the user's staged files.
+func TestCommitPathThatLooksLikeAGlob(t *testing.T) {
+	skipOnWindows(t)
+	r := newRepo(t)
+	r.write("a.txt", "a\n")
+	r.write("*.txt", "star\n")
+	r.commitAll("base")
+	r.write("a.txt", "a staged\n")
+	r.git("add", "a.txt")
+	r.write("*.txt", "star changed\n")
+
+	r.commit("star", "*.txt")
+	if got := r.blob("HEAD", "*.txt"); got != "star changed\n" {
+		t.Errorf("*.txt in HEAD = %q", got)
+	}
+	if got := r.git("diff", "--cached", "--name-only"); got != "a.txt\n" {
+		t.Errorf("staged after commit: %q, want only a.txt", got)
+	}
+	if got := r.git("diff", "--name-only"); got != "" {
+		t.Errorf("unstaged after commit: %q", got)
+	}
+}
+
+// apply.whitespace=fix would strip the trailing blanks from what is
+// committed, and =error would refuse the hunk.
+func TestCommitIgnoresApplyWhitespaceConfig(t *testing.T) {
+	for _, setting := range []string{"fix", "error"} {
+		t.Run(setting, func(t *testing.T) {
+			r := newRepo(t)
+			r.write("f.txt", "a\n")
+			r.commitAll("base")
+			r.git("config", "apply.whitespace", setting)
+			work := "a  \nb\t\n"
+			r.write("f.txt", work)
+
+			r.commit("trailing blanks", "f.txt")
+			if got := r.blob("HEAD", "f.txt"); got != work {
+				t.Errorf("f.txt in HEAD = %q, want %q", got, work)
+			}
+			if s := r.status(); s != "" {
+				t.Errorf("status:\n%s", s)
+			}
+		})
+	}
+}
+
 func TestCommitRunsPreCommitHook(t *testing.T) {
 	skipOnWindows(t)
 	hook := func(r *testRepo, script string) {
