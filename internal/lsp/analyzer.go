@@ -70,7 +70,9 @@ func (a *Analyzer) Refresh() error {
 		a.lastFetch = time.Now()
 	}
 
-	baseTree, err := a.refs.GetHEADTreeHash()
+	// Each teammate's changes are measured against the base their state
+	// records. HEAD is only the fallback for states from older versions.
+	head, err := a.refs.ResolveRef("HEAD")
 	if err != nil {
 		return err
 	}
@@ -85,7 +87,10 @@ func (a *Analyzer) Refresh() error {
 		localSet[f] = true
 	}
 
-	myTree, _ := a.refs.GetUserTreeRef(a.userID)
+	mine, err := a.refs.GetUserState(a.userID)
+	if err != nil {
+		mine = git.UserRef{}
+	}
 
 	teammates, err := a.refs.ListUserRefs()
 	if err != nil {
@@ -99,19 +104,20 @@ func (a *Analyzer) Refresh() error {
 			continue
 		}
 
-		theirChanges, err := a.conflicts.DiffTrees(baseTree, teammate.TreeHash)
+		theirBase := teammate.Base(head)
+		theirChanges, err := a.conflicts.DiffTrees(theirBase, teammate.TreeHash)
 		if err != nil {
 			continue
 		}
 
-		conflictedFiles := a.predictConflictedFiles(baseTree, myTree, teammate.TreeHash)
+		conflictedFiles := a.predictConflictedFiles(mine, teammate, head)
 
 		for _, change := range theirChanges {
 			if !localSet[change.Path] {
 				continue
 			}
 
-			patch, _ := a.filePatch(baseTree, teammate.TreeHash, change.Path)
+			patch, _ := a.filePatch(theirBase, teammate.TreeHash, change.Path)
 
 			report := reports[change.Path]
 			if report == nil {
@@ -140,13 +146,17 @@ func (a *Analyzer) ReportForFile(relativePath string) *FileReport {
 	return a.reports[relativePath]
 }
 
-func (a *Analyzer) predictConflictedFiles(baseTree, myTree, theirTree string) map[string]bool {
-	if myTree == "" {
+func (a *Analyzer) predictConflictedFiles(mine, theirs git.UserRef, fallbackBase string) map[string]bool {
+	if mine.TreeHash == "" {
 		return nil
 	}
 
-	report, err := a.conflicts.PredictConflicts(baseTree, myTree, theirTree)
-	if err != nil || !report.HasConflicts {
+	report, err := a.conflicts.PredictStateConflicts(mine, theirs, fallbackBase)
+	if err != nil {
+		log.Printf("predict conflicts with %s: %v", theirs.UserID, err)
+		return nil
+	}
+	if !report.HasConflicts {
 		return nil
 	}
 
@@ -185,8 +195,8 @@ func (a *Analyzer) modifiedFiles() ([]string, error) {
 	return files, nil
 }
 
-func (a *Analyzer) filePatch(baseTree, theirTree, path string) (string, error) {
-	cmd := exec.Command("git", "diff-tree", "-p", baseTree, theirTree, "--", path)
+func (a *Analyzer) filePatch(base, theirTree, path string) (string, error) {
+	cmd := exec.Command("git", "diff-tree", "-p", base, theirTree, "--", path)
 	cmd.Dir = a.repoPath
 	output, err := cmd.Output()
 	if err != nil {

@@ -43,6 +43,43 @@ func (c *ConflictPredictor) PredictConflicts(base, treeA, treeB string) (*Confli
 	if err != nil {
 		return nil, err
 	}
+	return c.mergeTree(left, right)
+}
+
+// PredictStateConflicts predicts conflicts from merging two published states.
+// States that record their base are merged as the commits they are, so git
+// uses the true merge base of the two bases rather than one shared guess.
+// A legacy state without a base is treated as built on fallbackBase (a
+// commit-ish, normally the local HEAD), matching the old behaviour.
+func (c *ConflictPredictor) PredictStateConflicts(mine, theirs UserRef, fallbackBase string) (*ConflictReport, error) {
+	left, err := c.stateCommit(mine, fallbackBase, "left")
+	if err != nil {
+		return nil, err
+	}
+	right, err := c.stateCommit(theirs, fallbackBase, "right")
+	if err != nil {
+		return nil, err
+	}
+	return c.mergeTree(left, right)
+}
+
+func (c *ConflictPredictor) stateCommit(state UserRef, fallbackBase, label string) (string, error) {
+	if state.HasBase() {
+		return state.Commit, nil
+	}
+	if fallbackBase == "" {
+		return "", fmt.Errorf("state for %s records no base and no fallback base was given", state.UserID)
+	}
+	resolve := exec.Command("git", "rev-parse", "--verify", "--end-of-options", fallbackBase+"^{commit}")
+	resolve.Dir = c.repoPath
+	parent, err := resolve.Output()
+	if err != nil {
+		return "", fmt.Errorf("resolve fallback base %s: %w", fallbackBase, err)
+	}
+	return c.predictionCommit(state.TreeHash, strings.TrimSpace(string(parent)), label)
+}
+
+func (c *ConflictPredictor) mergeTree(left, right string) (*ConflictReport, error) {
 	cmd := exec.Command("git", "merge-tree", "--write-tree", left, right)
 	cmd.Dir = c.repoPath
 
@@ -183,13 +220,16 @@ type TreeDiff struct {
 	Path   string
 }
 
-func (c *ConflictPredictor) OverlapsWith(base, treeA, treeB string) ([]string, error) {
-	changesA, err := c.DiffTrees(base, treeA)
+// OverlapsWith returns the paths that both treeA (relative to baseA) and
+// treeB (relative to baseB) change. Each side is diffed against its own base
+// so changes one side merely lacks are not counted as edits.
+func (c *ConflictPredictor) OverlapsWith(baseA, treeA, baseB, treeB string) ([]string, error) {
+	changesA, err := c.DiffTrees(baseA, treeA)
 	if err != nil {
 		return nil, err
 	}
 
-	changesB, err := c.DiffTrees(base, treeB)
+	changesB, err := c.DiffTrees(baseB, treeB)
 	if err != nil {
 		return nil, err
 	}

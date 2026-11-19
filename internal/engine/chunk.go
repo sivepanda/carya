@@ -209,7 +209,8 @@ func (e *Engine) PublishState() error {
 		return err
 	}
 
-	return e.refManager.UpdateUserTreeRef(e.userID, treeHash)
+	_, err = e.refManager.PublishUserState(e.userID, treeHash)
+	return err
 }
 
 // PublishAndPushState writes the current working tree to a git ref and pushes
