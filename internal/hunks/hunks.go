@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -39,6 +38,7 @@ type Hunk struct {
 	order      int    // position in List's result
 	digest     string // the content hash an ID starts with
 	line       int    // the line a change starts at in the working tree file
+	root       string // the checkout List read, which Select reads paths against
 }
 
 // List returns the working tree's changes against HEAD as hunks, in file
@@ -59,7 +59,11 @@ func List(repoRoot string) ([]Hunk, error) {
 	if err != nil {
 		return nil, fmt.Errorf("diff working tree: %w", err)
 	}
-	return parse(diff)
+	hunks, err := parse(diff)
+	for i := range hunks {
+		hunks[i].root = repoRoot
+	}
+	return hunks, err
 }
 
 // emptyTree returns the ID of the empty tree, which differs between SHA-1
@@ -250,19 +254,21 @@ func assignIDs(hunks []Hunk) {
 	}
 }
 
-// Select resolves hunk IDs and file paths to hunks. A path selects every
-// hunk of that file. It fails on anything that matches nothing, which is
-// usually an ID from before the working tree changed, and on an ID that now
-// matches several identical hunks.
+// Select resolves hunk IDs, file paths and directories to hunks. A path
+// selects every hunk of that file, and a directory every hunk under it.
+// Paths are read from the checkout root, as `carya hunks` prints them, and
+// then from the current directory; one starting with ./ or ../ only from the
+// current directory (see pathRefs). It fails on anything that matches
+// nothing, which is usually an ID from before the working tree changed, and
+// on an ID that now matches several identical hunks.
 func Select(all []Hunk, refs []string) ([]Hunk, error) {
 	byID := map[string]int{}
 	byDigest := map[string][]int{}
-	byPath := map[string][]int{}
 	for i, h := range all {
 		byID[h.ID] = i
 		byDigest[h.digest] = append(byDigest[h.digest], i)
-		byPath[h.Path] = append(byPath[h.Path], i)
 	}
+	paths := newPathRefs(all)
 	picked := map[int]bool{}
 	var unknown, ambiguous []string
 	lines := map[int]map[int]bool{} // the lines "<id>:<ranges>" picks of a hunk
@@ -276,11 +282,7 @@ func Select(all []Hunk, refs []string) ([]Hunk, error) {
 			picked[i] = true
 			continue
 		}
-		is, ok := byPath[ref]
-		if !ok {
-			is, ok = byPath[path.Clean(filepath.ToSlash(ref))]
-		}
-		if ok {
+		if is := paths.match(filepath.ToSlash(ref)); len(is) > 0 {
 			for _, i := range is {
 				picked[i] = true
 			}
@@ -338,7 +340,7 @@ func Select(all []Hunk, refs []string) ([]Hunk, error) {
 
 	var problems []string
 	if len(unknown) > 0 {
-		problems = append(problems, "no hunk or changed file matches "+strings.Join(unknown, ", "))
+		problems = append(problems, "no hunk or changed file matches "+paths.explain(unknown))
 	}
 	if len(ambiguous) > 0 {
 		problems = append(problems, "identical hunks share the ID "+strings.Join(ambiguous, "; "))
