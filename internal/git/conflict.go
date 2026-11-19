@@ -198,8 +198,11 @@ func (c *ConflictPredictor) GetCommonAncestor(commitA, commitB string) (string, 
 	return strings.TrimSpace(string(output)), nil
 }
 
+// DiffTrees lists the files that differ between two trees (or commits). It
+// reads git's NUL-separated output, so paths with spaces or non-ASCII
+// characters come through intact.
 func (c *ConflictPredictor) DiffTrees(treeA, treeB string) ([]TreeDiff, error) {
-	cmd := exec.Command("git", "diff-tree", "-r", "--name-status", treeA, treeB)
+	cmd := exec.Command("git", "diff-tree", "-r", "-z", "--no-renames", "--name-status", treeA, treeB)
 	cmd.Dir = c.repoPath
 
 	output, err := cmd.Output()
@@ -208,17 +211,10 @@ func (c *ConflictPredictor) DiffTrees(treeA, treeB string) ([]TreeDiff, error) {
 	}
 
 	var diffs []TreeDiff
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			continue
-		}
-		diffs = append(diffs, TreeDiff{Status: parts[0], Path: parts[1]})
+	fields := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
+	for i := 0; i+1 < len(fields); i += 2 {
+		diffs = append(diffs, TreeDiff{Status: fields[i], Path: fields[i+1]})
 	}
-
 	return diffs, nil
 }
 
