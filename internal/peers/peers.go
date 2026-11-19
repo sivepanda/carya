@@ -215,7 +215,8 @@ func Summary(changes []Change, now time.Time) string {
 			b.WriteString(". It merges cleanly with your current changes so far.")
 		}
 		b.WriteString("\n")
-		if ch.Patch != "" {
+		// A deletion's diff is the whole file; saying so is enough.
+		if ch.Patch != "" && ch.Status != "D" {
 			b.WriteString(strings.TrimRight(ch.Patch, "\n"))
 			b.WriteString("\n")
 		}
