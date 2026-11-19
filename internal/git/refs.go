@@ -339,46 +339,6 @@ func (r *RefManager) ListUserRefs() ([]UserRef, error) {
 	return refs, nil
 }
 
-// SetBaseRef sets refs/carya/base to the current HEAD.
-func (r *RefManager) SetBaseRef() error {
-	// Get current HEAD
-	cmd := exec.Command("git", "rev-parse", "HEAD")
-	cmd.Dir = r.repoPath
-
-	output, err := cmd.Output()
-	if err != nil {
-		log.Printf("Failed to get HEAD: %v", err)
-		return fmt.Errorf("failed to get HEAD: %w", err)
-	}
-
-	headHash := strings.TrimSpace(string(output))
-
-	// Update the base ref
-	cmd = exec.Command("git", "update-ref", "refs/carya/base", headHash)
-	cmd.Dir = r.repoPath
-
-	if output, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("Failed to set base ref: %v, output: %s", err, output)
-		return fmt.Errorf("failed to set base ref: %w\nOutput: %s", err, output)
-	}
-
-	return nil
-}
-
-// GetBaseRef retrieves the base ref hash.
-func (r *RefManager) GetBaseRef() (string, error) {
-	cmd := exec.Command("git", "show-ref", "--hash", "refs/carya/base")
-	cmd.Dir = r.repoPath
-
-	output, err := cmd.Output()
-	if err != nil {
-		log.Printf("Base ref not found")
-		return "", fmt.Errorf("base ref not found")
-	}
-
-	return strings.TrimSpace(string(output)), nil
-}
-
 // HasRemote reports whether the repository has a remote with this name.
 func (r *RefManager) HasRemote(remote string) bool {
 	cmd := exec.Command("git", "remote", "get-url", remote)
