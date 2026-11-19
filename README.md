@@ -53,6 +53,8 @@ carya integrate
 
 This merges every published state (each agent's and yours) onto the default branch in memory, leaves out and reports any state that conflicts along with whose work it collides with, and keeps the result at `refs/carya/integration`. It then checks the result out in a temporary worktree, runs the repository's Mycelia post-checkout setup, and builds and tests it (`--run` to choose the commands; by default they are detected from `go.mod`, `package.json`, `Cargo.toml`, `pyproject.toml` or a `Makefile`). Your checkout is never touched. Note that this runs other people's unfinished code on your machine. `--since 24h` leaves out states nobody has published in a day, `--merge-only` skips the build and tests, and `--json` is there for agents.
 
+States stay until someone removes them, so agents that went away leave theirs behind. `carya states` lists every state with its age and whether its work has already landed on the default branch, and `carya states prune` deletes the stale ones: landed work, and states not republished for a week (`--older-than` to change it, `--user` to name them, `--dry-run` to look first). It only deletes your local copies unless you pass `--remote`, which deletes them on `origin` for everyone.
+
 Use `carya check <file>` to see other agents' unfinished changes to a file yourself. Agents in worktrees of the same repository see each other with no network; with an `origin` remote, states are also pushed to `refs/carya/*`, which does not show up as branches on GitHub. Cloud sessions don't share state yet.
 
 ## Planned Components
