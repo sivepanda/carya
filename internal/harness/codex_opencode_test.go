@@ -121,6 +121,16 @@ func TestOpenCodePostToolReportsAfterEdits(t *testing.T) {
 	if out := run(map[string]any{"cwd": repo, "tool": "bash", "args": map[string]any{"command": "ls"}}); out != "" {
 		t.Fatalf("bash should only snapshot, got %s", out)
 	}
+
+	// OpenCode has no session-start hook; the plugin marks a session's first
+	// tool call, and that call gets the tools hint before any edit report.
+	if out := run(map[string]any{"cwd": repo, "tool": "bash", "args": map[string]any{"command": "ls"}, "sessionStart": true}); out != toolsHint {
+		t.Fatalf("a session's first call should get only the tools hint, got:\n%s", out)
+	}
+	out := run(map[string]any{"cwd": repo, "tool": "edit", "args": map[string]any{"path": "shared.txt"}, "sessionStart": true})
+	if !strings.HasPrefix(out, toolsHint) || !strings.Contains(out, "+from b") {
+		t.Fatalf("a first call that edits should get the hint, then the report, got:\n%s", out)
+	}
 }
 
 func TestOpenCodePluginInstall(t *testing.T) {
@@ -130,7 +140,7 @@ func TestOpenCodePluginInstall(t *testing.T) {
 		t.Fatalf("install: %v %v", changed, err)
 	}
 	src, _ := os.ReadFile(path)
-	for _, want := range []string{openCodeMarker, `const CARYA = "/opt/my \"tools\"/carya"`, `"--require-opt-in"`, `"tool.execute.after"`, `ctx.tool.hook("execute.after"`} {
+	for _, want := range []string{openCodeMarker, `const CARYA = "/opt/my \"tools\"/carya"`, `"--require-opt-in"`, `"tool.execute.after"`, `ctx.tool.hook("execute.after"`, `sessionStart`} {
 		if !strings.Contains(string(src), want) {
 			t.Errorf("plugin is missing %s", want)
 		}
