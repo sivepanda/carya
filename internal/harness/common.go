@@ -182,7 +182,7 @@ func unseen(s *agent.Session, session string, changes []peers.Change) (fresh, up
 // toolsHint tells the agent which history and commit commands it can run.
 // It is the only thing added to every session, so it stays one line; the
 // answers come only when asked.
-const toolsHint = "Carya: before changing a file, `carya related <file>` lists files that usually change with it and `carya why <file>[:line]` shows why it changed and who is changing it now; to commit in steps, `carya hunks` lists your uncommitted changes as hunks and `carya commit -m <msg> <ids|files>` commits one group.\n"
+const toolsHint = "Carya: before changing a file, `carya related <file>` lists files that usually change with it and `carya why <file>[:line]` shows why it changed and who is changing it now; to commit in steps, `carya hunks` lists your uncommitted changes as hunks and `carya commit -m <msg> <ids|files|id:lines>` commits one group.\n"
 
 // sessionOverview is the session-start note: the history commands, then
 // who else has unfinished work in the repository, if anyone. Per-file detail

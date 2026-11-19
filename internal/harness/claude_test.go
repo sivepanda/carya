@@ -60,7 +60,7 @@ func TestToolsHintIsOneLineNamingTheCommands(t *testing.T) {
 	if strings.Count(toolsHint, "\n") != 1 || !strings.HasSuffix(toolsHint, "\n") {
 		t.Fatalf("the hint is added to every session, so it must be one line: %q", toolsHint)
 	}
-	for _, cmd := range []string{"`carya related <file>`", "`carya why <file>[:line]`", "`carya hunks`", "`carya commit -m <msg> <ids|files>`"} {
+	for _, cmd := range []string{"`carya related <file>`", "`carya why <file>[:line]`", "`carya hunks`", "`carya commit -m <msg> <ids|files|id:lines>`"} {
 		if !strings.Contains(toolsHint, cmd) {
 			t.Errorf("the hint should name %s: %q", cmd, toolsHint)
 		}
