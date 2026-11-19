@@ -23,6 +23,7 @@ import (
 var (
 	setupScope  string
 	setupRemove bool
+	setupBase   string
 )
 
 var setupCmd = &cobra.Command{
@@ -166,6 +167,10 @@ func newSetupCmd(h harnessSetup) *cobra.Command {
 			if err := harness.OptIn(wd); err != nil {
 				fail(err)
 			}
+			base, err := harness.EnsureBase(wd, setupBase)
+			if err != nil {
+				fail(err)
+			}
 			for _, pattern := range h.excludes(setupScope) {
 				if err := s.Repo.EnsureLocallyExcluded(pattern); err != nil {
 					fail(err)
@@ -184,6 +189,9 @@ func newSetupCmd(h harnessSetup) *cobra.Command {
 				fmt.Printf("Carya's %s %s are already up to date in %s\n", h.display, h.what, path)
 			}
 			fmt.Printf("This checkout's agent identity: %s\n", s.UserID)
+			if base != "" {
+				fmt.Printf("Agents' work counts from where it forks off %s (change with --base).\n", base)
+			}
 			if ok, why := s.Sharing(); ok {
 				fmt.Println("States are shared through origin (refs/carya/*, which GitHub's branch list does not show).")
 			} else {
@@ -403,6 +411,7 @@ func fail(err error) {
 func init() {
 	setupCmd.PersistentFlags().StringVar(&setupScope, "scope", harness.ScopeLocal, "where to install: local, project or user")
 	setupCmd.PersistentFlags().BoolVar(&setupRemove, "remove", false, "remove what setup installed instead of installing it")
+	setupCmd.PersistentFlags().StringVar(&setupBase, "base", "", "branch agents' work is merged into (default: the current branch)")
 	for _, h := range harnessSetups {
 		setupCmd.AddCommand(newSetupCmd(h))
 	}

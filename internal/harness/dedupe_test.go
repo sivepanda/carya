@@ -43,3 +43,22 @@ func TestPreToolUseTellsEachSessionAboutAChangeOnce(t *testing.T) {
 		t.Fatal("without a session ID every edit should get the note")
 	}
 }
+
+func TestEnsureBase(t *testing.T) {
+	isolate(t)
+	repo := newRepo(t)
+	branch := gitRun(t, repo, "symbolic-ref", "--short", "HEAD")
+	if got, err := EnsureBase(repo, ""); err != nil || got != branch {
+		t.Fatalf("unset: got %q %v, want the current branch %q", got, err, branch)
+	}
+	gitRun(t, repo, "checkout", "-q", "-b", "other")
+	if got, _ := EnsureBase(repo, ""); got != branch {
+		t.Fatalf("an existing setting should be kept, got %q", got)
+	}
+	if got, err := EnsureBase(repo, "other"); err != nil || got != "other" {
+		t.Fatalf("explicit: got %q %v", got, err)
+	}
+	if _, err := EnsureBase(repo, "no-such-branch"); err == nil {
+		t.Fatal("an unknown branch should be refused")
+	}
+}

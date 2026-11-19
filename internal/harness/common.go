@@ -206,3 +206,44 @@ func OptIn(dir string) error {
 	}
 	return nil
 }
+
+// EnsureBase records the integration branch agents' work is measured
+// against and merged into (`git config carya.base`), shared by every
+// worktree. An explicit branch always wins; otherwise an existing setting is
+// kept, and if there is none the branch checked out in dir is used. It
+// returns the branch in effect, or "" when none could be chosen (detached
+// HEAD and nothing set).
+func EnsureBase(dir, branch string) (string, error) {
+	current := func() string {
+		cmd := exec.Command("git", "config", "--get", "carya.base")
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if branch == "" {
+		if b := current(); b != "" {
+			return b, nil
+		}
+		cmd := exec.Command("git", "symbolic-ref", "--quiet", "--short", "HEAD")
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			return "", nil
+		}
+		branch = strings.TrimSpace(string(out))
+	}
+	check := exec.Command("git", "rev-parse", "--verify", "--quiet", branch+"^{commit}")
+	check.Dir = dir
+	if check.Run() != nil {
+		return "", fmt.Errorf("%q is not a branch or commit here", branch)
+	}
+	set := exec.Command("git", "config", "--local", "carya.base", branch)
+	set.Dir = dir
+	if out, err := set.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git config carya.base: %w\n%s", err, out)
+	}
+	return branch, nil
+}

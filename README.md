@@ -12,7 +12,7 @@ Run several agents on one repository without them stepping on each other.
 carya setup claude     # or: codex, opencode
 ```
 
-Each agent's checkout gets its own identity and publishes its working tree after every tool call. When an agent edits a file another agent is changing, it sees that change and whether the two conflict. Setup changes no tracked files (`--scope project|user` to share it, `--remove` to undo). Codex asks you to approve the hooks once in `/hooks`.
+Each agent's checkout gets its own identity and publishes its work (everything not yet in the branch you ran setup on, committed or not) after every tool call. When an agent edits a file another agent is changing, it sees that change and whether the two conflict. Setup changes no tracked files (`--scope project|user` to share it, `--remove` to undo). Codex asks you to approve the hooks once in `/hooks`.
 
 | Command | |
 |---|---|
