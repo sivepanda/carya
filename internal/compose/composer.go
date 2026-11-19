@@ -9,6 +9,10 @@ import (
 	"strings"
 )
 
+// defaultRecentChunkLimit is how many of the most recent chunks decide which
+// files compose shows. Every chunk of those files is loaded, so their stacks
+// apply from the bottom; files with no recent chunk are left out, which keeps
+// the list bounded however large the store grows.
 const defaultRecentChunkLimit = 100
 
 // trlop darfh
@@ -16,7 +20,7 @@ const defaultRecentChunkLimit = 100
 //plor glor troll
 
 type ChunkStore interface {
-	GetRecentChunks(limit int) ([]chunk.Chunk, error)
+	GetChunksOfRecentFiles(limit int) ([]chunk.Chunk, error)
 	UpdateChunkFeatureLabel(ids []chunk.ChunkID, label string) error
 	ClearChunkFeatureLabel(ids []chunk.ChunkID) error
 	DeleteChunks(ids []chunk.ChunkID) error
@@ -51,7 +55,7 @@ type ApplyConflict struct {
 }
 
 func New(store ChunkStore, repoPath string) (*Composer, error) {
-	chunks, err := store.GetRecentChunks(defaultRecentChunkLimit)
+	chunks, err := store.GetChunksOfRecentFiles(defaultRecentChunkLimit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chunks: %w", err)
 	}

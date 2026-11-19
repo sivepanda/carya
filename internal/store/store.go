@@ -126,6 +126,30 @@ func (s *SQLiteStore) GetRecentChunks(limit int) ([]chunk.Chunk, error) {
 	return s.scanChunks(rows)
 }
 
+// GetChunksOfRecentFiles retrieves every chunk of each file that has one of
+// the limit most recently created chunks, newest first. A file's chunks form
+// a stack that only applies from the bottom up, so the window of recent
+// chunks is widened to whole files instead of cutting a stack off partway.
+// How many files are returned is bounded by limit; how many chunks each has
+// is not.
+func (s *SQLiteStore) GetChunksOfRecentFiles(limit int) ([]chunk.Chunk, error) {
+	query := `
+		SELECT id, file_path, diff, start_time, end_time, COALESCE(feature_label, ''), hash, manual
+		FROM chunks
+		WHERE file_path IN (
+			SELECT file_path FROM chunks ORDER BY created_at DESC LIMIT ?
+		)
+		ORDER BY created_at DESC
+	`
+	rows, err := s.db.Query(query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return s.scanChunks(rows)
+}
+
 // GetAllChunks retrieves all chunks ordered by creation time (newest first).
 func (s *SQLiteStore) GetAllChunks() ([]chunk.Chunk, error) {
 	query := `
