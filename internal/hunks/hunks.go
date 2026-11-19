@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -20,6 +19,7 @@ import (
 	"strings"
 
 	"carya/internal/git"
+	"carya/internal/patch"
 )
 
 // Hunk is one independently committable piece of the working tree's changes:
@@ -351,9 +351,9 @@ func Patch(hunks []Hunk) string {
 }
 
 // Commit commits exactly the hunks refs names, with message, through a
-// temporary index, so other changes (staged or not) stay as they are. It
-// runs `git commit`, so the repository's commit hooks and the user's
-// identity apply. It returns git's output.
+// temporary index, so other changes (staged or not) stay as they are; see
+// patch.ApplyAndCommit. It runs `git commit`, so the repository's commit
+// hooks and the user's identity apply. It returns git's output.
 func Commit(repoRoot string, refs []string, message string) (string, []Hunk, error) {
 	if strings.TrimSpace(message) == "" {
 		return "", nil, errors.New("a commit message is required")
@@ -361,7 +361,7 @@ func Commit(repoRoot string, refs []string, message string) (string, []Hunk, err
 	if len(refs) == 0 {
 		return "", nil, errors.New("name the hunk IDs or files to commit")
 	}
-	if err := checkNoOperation(repoRoot); err != nil {
+	if err := patch.CheckNoOperation(repoRoot); err != nil {
 		return "", nil, err
 	}
 	all, err := List(repoRoot)
@@ -375,196 +375,8 @@ func Commit(repoRoot string, refs []string, message string) (string, []Hunk, err
 	if err != nil {
 		return "", nil, err
 	}
-	oldHead := ""
-	if out, err := run(repoRoot, nil, "", "rev-parse", "--verify", "--quiet", "HEAD^{commit}"); err == nil {
-		oldHead = strings.TrimSpace(out)
-	}
-	out, err := commitPatch(repoRoot, oldHead, Patch(picked), message)
-	if err != nil {
-		return out, picked, err
-	}
-	if err := updateIndex(repoRoot, oldHead); err != nil {
-		return out, picked, fmt.Errorf("committed, but could not update the index to match: %w", err)
-	}
-	return out, picked, nil
-}
-
-// checkNoOperation refuses to commit while git is in the middle of a merge,
-// cherry-pick or revert: the commit would become that operation's, recording
-// its other parent or taking its author, with only some of its changes.
-func checkNoOperation(repoRoot string) error {
-	out, err := run(repoRoot, nil, "", "rev-parse", "--git-path", "MERGE_HEAD", "--git-path", "CHERRY_PICK_HEAD", "--git-path", "REVERT_HEAD")
-	if err != nil {
-		return err
-	}
-	paths := strings.Split(strings.TrimSpace(out), "\n")
-	for i, op := range []string{"merge", "cherry-pick", "revert"} {
-		if i >= len(paths) {
-			break
-		}
-		p := paths[i]
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(repoRoot, p)
-		}
-		if _, err := os.Stat(p); err == nil {
-			return fmt.Errorf("a %s is in progress; finish or abort it before committing hunks", op)
-		}
-	}
-	return nil
-}
-
-// commitPatch commits HEAD (or nothing, on an unborn branch) with patch
-// applied, building the commit in a temporary index.
-func commitPatch(repoRoot, oldHead, patch, message string) (string, error) {
-	dir, err := os.MkdirTemp("", "carya-hunks-*")
-	if err != nil {
-		return "", fmt.Errorf("create temporary index: %w", err)
-	}
-	defer os.RemoveAll(dir)
-	env := append(os.Environ(), "GIT_INDEX_FILE="+filepath.Join(dir, "index"))
-
-	seed := []string{"read-tree", "--empty"}
-	if oldHead != "" {
-		seed = []string{"read-tree", oldHead}
-	}
-	if _, err := run(repoRoot, env, "", seed...); err != nil {
-		return "", fmt.Errorf("seed temporary index: %w", err)
-	}
-	// The hunks are committed exactly as they are in the working tree:
-	// apply.whitespace=fix would otherwise change them and =error refuse them.
-	if _, err := run(repoRoot, env, patch, "apply", "--cached", "--whitespace=nowarn", "-"); err != nil {
-		return "", fmt.Errorf("apply hunks: %w", err)
-	}
-	cmd := exec.Command("git", "commit", "-m", message)
-	cmd.Dir = repoRoot
-	cmd.Env = env
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("git commit: %w\n%s", err, out)
-	}
-	return string(out), nil
-}
-
-// entry is a path's mode and object in a tree or the index; an absent path
-// has mode "000000".
-type entry struct{ mode, oid string }
-
-func (e entry) regular() bool { return e.mode == "100644" || e.mode == "100755" }
-
-// updateIndex brings the checkout's index up to date with the commit just
-// made from a temporary index, for the paths it changed. A path the user had
-// nothing staged for gets the committed version. A path they had staged
-// keeps their version with the committed change merged in, or as it is when
-// the two overlap, so the index never shows the commit being undone. It
-// reads and writes index entries directly: paths are never pathspecs, so a
-// file named "*.go" stands for itself.
-func updateIndex(repoRoot, oldHead string) error {
-	base := oldHead
-	if base == "" {
-		var err error
-		if base, err = emptyTree(repoRoot); err != nil {
-			return err
-		}
-	}
-	raw, err := run(repoRoot, nil, "", "diff-tree", "-r", "-z", "--no-renames", "--no-abbrev", base, "HEAD")
-	if err != nil {
-		return fmt.Errorf("list committed paths: %w", err)
-	}
-	staged, err := run(repoRoot, nil, "", "ls-files", "--stage", "-z")
-	if err != nil {
-		return fmt.Errorf("read index: %w", err)
-	}
-	index := map[string]entry{}
-	conflicted := map[string]bool{}
-	for _, rec := range strings.Split(staged, "\x00") {
-		meta, p, ok := strings.Cut(rec, "\t")
-		f := strings.Fields(meta)
-		if !ok || len(f) != 3 {
-			continue
-		}
-		if f[2] != "0" {
-			conflicted[p] = true
-		}
-		index[p] = entry{f[0], f[1]}
-	}
-
-	var info strings.Builder
-	fields := strings.Split(raw, "\x00")
-	for i := 0; i+1 < len(fields); i += 2 {
-		f := strings.Fields(strings.TrimPrefix(fields[i], ":"))
-		if len(f) < 5 {
-			return fmt.Errorf("unexpected diff-tree output %q", fields[i])
-		}
-		p, old, committed := fields[i+1], entry{f[0], f[2]}, entry{f[1], f[3]}
-		if conflicted[p] {
-			continue
-		}
-		cur, ok := index[p]
-		if !ok {
-			cur = entry{"000000", strings.Repeat("0", len(old.oid))}
-		}
-		switch {
-		case cur == committed:
-		case cur == old:
-			writeEntry(&info, committed, p)
-		default:
-			if merged, ok := mergeStaged(repoRoot, old, cur, committed); ok {
-				writeEntry(&info, merged, p)
-			}
-		}
-	}
-	if info.Len() == 0 {
-		return nil
-	}
-	if _, err := run(repoRoot, nil, info.String(), "update-index", "-z", "--index-info"); err != nil {
-		return err
-	}
-	// Entries written that way have no stat data; refresh it so plumbing
-	// such as diff-files does not report the files as changed.
-	_, _ = run(repoRoot, nil, "", "update-index", "-q", "--refresh")
-	return nil
-}
-
-func writeEntry(b *strings.Builder, e entry, path string) {
-	if e.mode == "000000" {
-		fmt.Fprintf(b, "0 %s\t%s\x00", e.oid, path) // mode 0 removes the path
-		return
-	}
-	fmt.Fprintf(b, "%s %s\t%s\x00", e.mode, e.oid, path)
-}
-
-// mergeStaged merges the committed change to a file (old to committed) into
-// the version the user has staged. It reports false unless all three are
-// regular files and they merge cleanly.
-func mergeStaged(repoRoot string, old, staged, committed entry) (entry, bool) {
-	if !old.regular() || !staged.regular() || !committed.regular() {
-		return entry{}, false
-	}
-	dir, err := os.MkdirTemp("", "carya-hunks-merge-*")
-	if err != nil {
-		return entry{}, false
-	}
-	defer os.RemoveAll(dir)
-	files := []string{filepath.Join(dir, "staged"), filepath.Join(dir, "old"), filepath.Join(dir, "committed")}
-	for i, e := range []entry{staged, old, committed} {
-		content, err := run(repoRoot, nil, "", "cat-file", "blob", e.oid)
-		if err != nil || os.WriteFile(files[i], []byte(content), 0o600) != nil {
-			return entry{}, false
-		}
-	}
-	merged, err := run(repoRoot, nil, "", "merge-file", "-p", "--quiet", files[0], files[1], files[2])
-	if err != nil { // conflicts, or a binary file
-		return entry{}, false
-	}
-	oid, err := run(repoRoot, nil, merged, "hash-object", "-w", "--stdin")
-	if err != nil {
-		return entry{}, false
-	}
-	mode := staged.mode
-	if staged.mode == old.mode {
-		mode = committed.mode
-	}
-	return entry{mode, strings.TrimSpace(oid)}, true
+	out, err := patch.ApplyAndCommit(repoRoot, Patch(picked), message)
+	return out, picked, err
 }
 
 // run runs git in dir, with env (nil for this process's) and stdin, and
