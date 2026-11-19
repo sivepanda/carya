@@ -119,5 +119,15 @@ func copyRealIndex(repoRoot string, dst *os.File) (bool, error) {
 	if _, err := io.Copy(dst, src); err != nil {
 		return false, fmt.Errorf("copy index: %w", err)
 	}
+	// Git treats an entry whose mtime is not older than the index file's as
+	// "racily clean" and compares its content, which is how it notices a file
+	// rewritten within the same second to the same size. The copy must keep
+	// the original's mtime, or git trusts the stale stat data and the edit is
+	// missed.
+	if info, err := src.Stat(); err == nil {
+		if err := os.Chtimes(dst.Name(), info.ModTime(), info.ModTime()); err != nil {
+			return false, fmt.Errorf("keep index mtime: %w", err)
+		}
+	}
 	return true, nil
 }

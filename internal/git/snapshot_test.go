@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func lsTree(t *testing.T, repo, tree string) map[string]string {
@@ -94,5 +95,38 @@ func TestWorkingStateTreeInFreshRepo(t *testing.T) {
 	}
 	if _, ok := lsTree(t, repo, tree)["first.txt"]; !ok {
 		t.Fatal("untracked file in a repo without commits is missing from the state")
+	}
+}
+
+// An edit in the same second as the last `git add`, keeping the file's size,
+// leaves its stat data matching the index. Git only notices because the
+// index is no older than the entry; the snapshot's copy of the index must
+// keep that true.
+func TestWorkingStateTreeSeesSameSecondSameSizeEdits(t *testing.T) {
+	repo := createMainRepo(t) // tracked.txt is "base\n"
+	path := filepath.Join(repo, "tracked.txt")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp := info.ModTime()
+
+	if err := os.WriteFile(path, []byte("edit\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Make it look like both happened at the same instant as the add.
+	for _, p := range []string{path, filepath.Join(repo, ".git", "index")} {
+		if err := os.Chtimes(p, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(1100 * time.Millisecond) // the temp copy must not look newer
+
+	tree, err := WorkingStateTree(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(runGit(t, repo, "show", tree+":tracked.txt")); got != "edit" {
+		t.Fatalf("snapshot missed the edit: tracked.txt = %q", got)
 	}
 }
