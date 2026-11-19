@@ -19,6 +19,7 @@ Each agent's checkout gets its own identity and publishes its working tree after
 | `carya check <file>` | Other agents' unfinished changes to a file |
 | `carya related <file>` | Files that usually change with it |
 | `carya why <file>[:line]` | Why it changed, and who is changing it now |
+| `carya hunks` | Your uncommitted changes as hunks; `carya commit -m <msg> <ids\|files>` commits a group of them |
 | `carya integrate` | Merge everyone's work, then set up, build and test it in a temporary worktree |
 | `carya states` | List published states; `carya states prune` deletes stale ones |
 
