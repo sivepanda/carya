@@ -42,63 +42,219 @@ func DecideRetention(repoPath string, c Chunk) (ReconcileDecision, string) {
 //     chunks that are kept, and pruned as no longer matching when it does not.
 //
 // Binary chunks cannot be applied, so they are kept while their path still
-// differs from HEAD, as before, and take no part in the stack.
+// differs from HEAD. A binary chunk does replace the whole file, though, so it
+// resets the stack: the text chunks recorded after it were diffed against the
+// content it left (the blob the daemon recorded as its hash, or no file for a
+// deletion), and are applied on top of that content instead of HEAD and the
+// chunks before it. Until HEAD has that content compose cannot apply them, so
+// they are kept with ReasonOnBinary. If the content is unknown (its blob is
+// gone) they are kept with that reason for as long as the binary chunk is.
+// Once the binary chunk is pruned the path matches HEAD again, and the chunks
+// after it are applied on top of HEAD.
 func DecideRetentionAll(repoPath string, chunks []Chunk) []Retention {
 	out := make([]Retention, len(chunks))
-	var text []int
+	var stacked []int
+	text := false
 	for i, c := range chunks {
 		patch := strings.TrimSpace(c.Diff)
-		switch {
-		case patch == "":
+		if patch == "" {
 			out[i] = Retention{DecisionPrune, "empty diff"}
-		case isBinaryPatch(patch):
-			out[i] = binaryRetention(repoPath, c)
-		default:
-			text = append(text, i)
+			continue
 		}
-	}
-	if len(text) == 0 {
-		return out
+		text = text || !isBinaryPatch(patch)
+		stacked = append(stacked, i)
 	}
 
-	upstreamRef := currentUpstreamRef(repoPath)
-	for _, stack := range stacksByFile(chunks, text) {
-		patches := stackPatches(chunks, stack)
-		committed := containedIn(repoPath, "HEAD", patches)
-		upstream := make([]bool, len(stack))
-		if upstreamRef != "" {
-			upstream = containedIn(repoPath, upstreamRef, patches)
-		}
-
-		var live []int // positions in stack still to be tried on top of HEAD
-		for j, i := range stack {
-			switch {
-			case committed[j]:
-				out[i] = Retention{DecisionPrune, "already applied/committed"}
-			case upstream[j]:
-				out[i] = Retention{DecisionPrune, "already in upstream"}
-			default:
-				live = append(live, j)
-			}
-		}
-
-		livePatches := make([]string, len(live))
-		for k, j := range live {
-			livePatches[k] = patches[j]
-		}
-		for k, applied := range applyInOrder(repoPath, livePatches) {
-			i := stack[live[k]]
-			if applied {
-				out[i] = Retention{DecisionKeep, "still applicable"}
-			} else {
-				out[i] = Retention{DecisionPrune, reasonNoLongerMatches}
-			}
-		}
+	upstreamRef := ""
+	if text {
+		upstreamRef = currentUpstreamRef(repoPath)
+	}
+	for _, stack := range stacksByFile(chunks, stacked) {
+		judgeStack(repoPath, chunks[stack[0]].FilePath, upstreamRef, chunks, stack, out, false)
 	}
 	return out
 }
 
-const reasonNoLongerMatches = "no longer matches"
+const (
+	reasonKept            = "still applicable"
+	reasonNoLongerMatches = "no longer matches"
+
+	// ReasonOnBinary is why a text chunk recorded after a binary chunk of its
+	// file is kept while HEAD lacks the content the binary chunk left: it
+	// applies on top of that content, but compose cannot apply the binary
+	// chunk, so it cannot commit this one yet either.
+	ReasonOnBinary = "waits on an uncommitted binary change"
+)
+
+// judgeStack decides, into out, the retention of path's chunks (stack:
+// indices into chunks, oldest first, none of them empty), as described for
+// DecideRetentionAll. With wantTip it also returns path's content once the
+// kept chunks are applied in order; ok is false when that cannot be told.
+func judgeStack(repoPath, path, upstreamRef string, chunks []Chunk, stack []int, out []Retention, wantTip bool) (tip Tip, ok bool) {
+	var text []int
+	for _, i := range stack {
+		if !isBinaryPatch(strings.TrimSpace(chunks[i].Diff)) {
+			text = append(text, i)
+		}
+	}
+	landed := make(map[int]Retention)
+	if len(text) > 0 {
+		patches := stackPatches(chunks, text)
+		committed := containedIn(repoPath, "HEAD", patches)
+		upstream := make([]bool, len(text))
+		if upstreamRef != "" {
+			upstream = containedIn(repoPath, upstreamRef, patches)
+		}
+		for k, i := range text {
+			switch {
+			case committed[k]:
+				landed[i] = Retention{DecisionPrune, "already applied/committed"}
+			case upstream[k]:
+				landed[i] = Retention{DecisionPrune, "already in upstream"}
+			}
+		}
+	}
+
+	// The remaining text chunks are applied in runs: the first on top of
+	// HEAD, each later one on top of what the binary chunk before it left.
+	runs := []stackRun{{}}
+	for _, i := range stack {
+		c := chunks[i]
+		if r, done := landed[i]; done {
+			out[i] = r
+			continue
+		}
+		if !isBinaryPatch(strings.TrimSpace(c.Diff)) {
+			last := &runs[len(runs)-1]
+			last.chunks = append(last.chunks, i)
+			continue
+		}
+		out[i] = binaryRetention(repoPath, c)
+		next := stackRun{}
+		if out[i].Decision == DecisionKeep {
+			next.base = binaryResult(repoPath, c)
+		}
+		runs = append(runs, next)
+	}
+
+	for k, run := range runs {
+		last := k == len(runs)-1
+		runTip, runOK := run.apply(repoPath, path, chunks, out, wantTip && last)
+		if last {
+			tip, ok = runTip, runOK
+		}
+	}
+	return tip, ok
+}
+
+// stackRun is a run of a file's text chunks (indices into chunks, oldest
+// first) recorded on top of base.
+type stackRun struct {
+	base   runBase
+	chunks []int
+}
+
+// runBase is the content a run of text chunks was recorded on top of: HEAD's
+// version of the file, or the content a binary chunk left it with.
+type runBase struct {
+	binary bool // left by a binary chunk; HEAD's version otherwise
+	known  bool // whether the binary chunk's content is known
+	tip    Tip  // the binary chunk's content, when known
+}
+
+// apply decides each of the run's chunks into out: kept when it applies on
+// top of the run's base and its earlier kept chunks, pruned as no longer
+// matching when it does not. With wantTip it also returns path's content at
+// the top of the run.
+func (r stackRun) apply(repoPath, path string, chunks []Chunk, out []Retention, wantTip bool) (Tip, bool) {
+	// Chunks on top of a binary change that cannot be checked are kept
+	// along with the binary chunk, which is kept while the path still
+	// differs from HEAD.
+	onBinary := func() (Tip, bool) {
+		for _, i := range r.chunks {
+			out[i] = Retention{DecisionKeep, ReasonOnBinary}
+		}
+		return Tip{}, false
+	}
+	if r.base.binary && !r.base.known {
+		return onBinary()
+	}
+	if len(r.chunks) == 0 && !wantTip {
+		return Tip{}, false
+	}
+
+	idx, err := newScratchIndex(repoPath, "HEAD")
+	if err != nil {
+		if r.base.binary {
+			return onBinary()
+		}
+		for _, i := range r.chunks {
+			out[i] = Retention{DecisionPrune, reasonNoLongerMatches}
+		}
+		return Tip{}, false
+	}
+	defer idx.remove()
+
+	keep := Retention{DecisionKeep, reasonKept}
+	if r.base.binary {
+		head, err := idx.tip(path)
+		if err == nil && head != r.base.tip {
+			keep.Reason = ReasonOnBinary
+			err = idx.set(path, r.base.tip)
+		}
+		if err != nil {
+			return onBinary()
+		}
+	}
+
+	for _, i := range r.chunks {
+		if idx.apply(chunks[i].Diff, false) {
+			out[i] = keep
+		} else {
+			out[i] = Retention{DecisionPrune, reasonNoLongerMatches}
+		}
+	}
+	if !wantTip {
+		return Tip{}, false
+	}
+	tip, err := idx.tip(path)
+	return tip, err == nil
+}
+
+// binaryResult returns what a kept binary chunk left its file with. The
+// daemon records the blob of the file's latest content as a chunk's hash, or
+// a "deleted-" marker when the chunk ends with the file gone. The content is
+// unknown when the hash names no blob in the repository: it was never written
+// there, or has been garbage collected since.
+func binaryResult(repoPath string, c Chunk) runBase {
+	hash := string(c.Hash)
+	if strings.HasPrefix(hash, "deleted-") {
+		return runBase{binary: true, known: true}
+	}
+	if !isObjectID(hash) {
+		return runBase{binary: true}
+	}
+	cmd := exec.Command("git", "cat-file", "-t", hash)
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil || strings.TrimSpace(string(out)) != "blob" {
+		return runBase{binary: true}
+	}
+	return runBase{binary: true, known: true, tip: Tip{Exists: true, Blob: hash}}
+}
+
+// isObjectID reports whether s is a full SHA-1 or SHA-256 object name.
+func isObjectID(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return false
+		}
+	}
+	return true
+}
 
 // Tip is a file's content at the top of its chunk stack.
 type Tip struct {
@@ -107,58 +263,49 @@ type Tip struct {
 }
 
 // StackTip returns path as it stands once its kept chunks (the ones
-// DecideRetentionAll keeps) are applied on top of HEAD in recording order.
-// That is the version the next chunk of path has to be diffed against for it
-// to stack on the existing ones. chunks may include other files' chunks,
-// which are ignored. The tip is computed on a temporary index, so neither the
+// DecideRetentionAll keeps) are applied on top of HEAD in recording order,
+// a binary chunk resetting it to the content that chunk left. That is the
+// version the next chunk of path has to be diffed against for it to stack on
+// the existing ones. chunks may include other files' chunks, which are
+// ignored. The tip is computed on a temporary index, so neither the
 // repository's index nor HEAD is touched; its blob is written to the
 // repository's object store.
 //
 // A file whose chunks have all landed in HEAD (or upstream) has HEAD's
 // version as its tip. ok is false when there is no stack to build on: the
 // file has chunks still to be committed but none of them applies any more
-// (the stack is stale), it has a binary chunk, whose change cannot be
-// applied, or git failed.
+// (the stack is stale), the content a binary chunk left is unknown, or git
+// failed.
 func StackTip(repoPath, path string, chunks []Chunk) (tip Tip, ok bool) {
-	var stack []Chunk
-	for _, c := range chunks {
-		if c.FilePath != path {
-			continue
+	var mine []int
+	for i, c := range chunks {
+		if c.FilePath == path && strings.TrimSpace(c.Diff) != "" {
+			mine = append(mine, i)
 		}
-		if isBinaryPatch(strings.TrimSpace(c.Diff)) {
-			return Tip{}, false
-		}
-		stack = append(stack, c)
 	}
-	sort.SliceStable(stack, func(a, b int) bool { return RecordedBefore(stack[a], stack[b]) })
+	var stack []int
+	if len(mine) > 0 {
+		stack = stacksByFile(chunks, mine)[0]
+	}
 
-	idx, err := newScratchIndex(repoPath, "HEAD")
-	if err != nil {
+	out := make([]Retention, len(chunks))
+	if tip, ok = judgeStack(repoPath, path, currentUpstreamRef(repoPath), chunks, stack, out, true); !ok {
 		return Tip{}, false
 	}
-	defer idx.remove()
 
 	kept, stale := 0, 0
-	for k, r := range DecideRetentionAll(repoPath, stack) {
+	for _, i := range stack {
 		switch {
-		case r.Decision == DecisionKeep:
-			if !idx.apply(stack[k].Diff, false) {
-				return Tip{}, false
-			}
+		case out[i].Decision == DecisionKeep:
 			kept++
-		case r.Reason == reasonNoLongerMatches:
+		case out[i].Reason == reasonNoLongerMatches:
 			stale++
 		}
 	}
 	if stale > 0 && kept == 0 {
 		return Tip{}, false
 	}
-
-	blob, exists, err := idx.entry(path)
-	if err != nil {
-		return Tip{}, false
-	}
-	return Tip{Exists: exists, Blob: blob}, true
+	return tip, true
 }
 
 // AppliedAtHEAD reports whether HEAD already contains a single chunk's change.
@@ -258,25 +405,6 @@ func containedIn(repoPath, ref string, patches []string) []bool {
 	return found
 }
 
-// applyInOrder applies patches one after another on top of HEAD, leaving out
-// any that do not apply, and reports which ones did.
-func applyInOrder(repoPath string, patches []string) []bool {
-	applied := make([]bool, len(patches))
-	if len(patches) == 0 {
-		return applied
-	}
-	idx, err := newScratchIndex(repoPath, "HEAD")
-	if err != nil {
-		return applied
-	}
-	defer idx.remove()
-
-	for j, patch := range patches {
-		applied[j] = idx.apply(patch, false)
-	}
-	return applied
-}
-
 func currentUpstreamRef(repoPath string) string {
 	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
 	cmd.Dir = repoPath
@@ -330,14 +458,14 @@ func (x *scratchIndex) apply(patch string, reverse bool) bool {
 	return cmd.Run() == nil
 }
 
-// entry returns path's blob hash in the index, and whether it is there.
-func (x *scratchIndex) entry(path string) (blob string, exists bool, err error) {
+// tip returns path's content in the index.
+func (x *scratchIndex) tip(path string) (Tip, error) {
 	cmd := exec.Command("git", "ls-files", "--cached", "-s", "-z", "--", ":(top,literal)"+path)
 	cmd.Dir = x.repoPath
 	cmd.Env = x.env
 	out, err := cmd.Output()
 	if err != nil {
-		return "", false, err
+		return Tip{}, err
 	}
 	// format: <mode> <hash> <stage>\t<path>\0
 	for record := range strings.SplitSeq(string(out), "\x00") {
@@ -346,10 +474,23 @@ func (x *scratchIndex) entry(path string) (blob string, exists bool, err error) 
 			continue
 		}
 		if fields := strings.Fields(meta); len(fields) >= 2 {
-			return fields[1], true, nil
+			return Tip{Exists: true, Blob: fields[1]}, nil
 		}
 	}
-	return "", false, nil
+	return Tip{}, nil
+}
+
+// set makes path hold tip's content in the index, or removes it when tip has
+// no file.
+func (x *scratchIndex) set(path string, tip Tip) error {
+	args := []string{"update-index", "--force-remove", "--", path}
+	if tip.Exists {
+		args = []string{"update-index", "--add", "--cacheinfo", "100644", tip.Blob, path}
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = x.repoPath
+	cmd.Env = x.env
+	return cmd.Run()
 }
 
 func (x *scratchIndex) remove() {

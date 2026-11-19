@@ -208,3 +208,54 @@ func TestApplyConflictKeepsStackApplicable(t *testing.T) {
 		t.Fatalf("skipped chunk should be kept, have %d", len(got))
 	}
 }
+
+func TestApplyConflictSkipsChunkOnUncommittedBinaryChange(t *testing.T) {
+	// data.bin starts out binary; a binary chunk turns it into text and a
+	// text chunk is recorded on top of that text.
+	const asText = "one\ntwo\n"
+	repo, diffs := stackRepo(t, "data.bin", "\x00\x01binary\n", asText, "one\nTWO\n")
+	textFile := filepath.Join(t.TempDir(), "as-text")
+	os.WriteFile(textFile, []byte(asText), 0644)
+	blob := strings.TrimSpace(gitRun(t, repo, "hash-object", "-w", textFile))
+
+	os.WriteFile(filepath.Join(repo, "other.txt"), []byte("other changed\n"), 0644)
+	otherDiff := gitRun(t, repo, "diff", "--", "other.txt")
+
+	now := time.Now()
+	st := saveChunks(t,
+		chunk.Chunk{ID: "bin", FilePath: "data.bin", Diff: "Binary file data.bin has changed\n(Initial hash: 00000000, Latest hash: " + blob[:8] + ")", StartTime: now, EndTime: now, Hash: chunk.ChunkHash(blob)},
+		chunk.Chunk{ID: "text", FilePath: "data.bin", Diff: diffs[1], StartTime: now.Add(time.Second), EndTime: now.Add(time.Second), Hash: "t"},
+		chunk.Chunk{ID: "other", FilePath: "other.txt", Diff: otherDiff, StartTime: now.Add(2 * time.Second), EndTime: now.Add(2 * time.Second), Hash: "o"},
+	)
+
+	c, err := New(st, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range c.Chunks() {
+		c.SetSelected(i, true)
+	}
+	res, err := c.CreateCommit("other")
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	conflict := res.ApplyConflict
+	if conflict == nil {
+		t.Fatal("expected an apply conflict for the chunk on the binary change")
+	}
+	// Compose cannot apply the binary change, so the text chunk on top of it
+	// cannot be committed yet, but it is not stale either.
+	if want := "data.bin (waits on an uncommitted binary change)"; len(conflict.Skipped) != 1 || conflict.Skipped[0] != want {
+		t.Fatalf("skipped = %q, want only %q", conflict.Skipped, want)
+	}
+
+	if _, err := c.ApplyApplicableCommit(conflict.Applicable, conflict.CommitMsg); err != nil {
+		t.Fatalf("commit applicable: %v", err)
+	}
+	if got := gitRun(t, repo, "show", "HEAD:other.txt"); got != "other changed\n" {
+		t.Fatalf("committed other.txt = %q", got)
+	}
+	if got, _ := st.FindChunks("data.bin"); len(got) != 2 {
+		t.Fatalf("data.bin's chunks should be kept, have %d", len(got))
+	}
+}

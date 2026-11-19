@@ -305,7 +305,9 @@ func (c *Composer) ApplyApplicableCommit(applicable map[int]bool, commitMsg stri
 // classifySelectedChunks splits the selection into the chunks that can be
 // committed together and the ones that must be skipped. The selected chunks
 // are judged as a set, so a chunk recorded on top of an earlier selected chunk
-// of the same file is applicable along with it.
+// of the same file is applicable along with it. A chunk recorded on top of a
+// binary change HEAD does not have yet is worth keeping, but cannot be
+// applied, since the binary change itself cannot be, so it is skipped.
 func (c *Composer) classifySelectedChunks() (map[int]bool, []string) {
 	applicable := make(map[int]bool)
 	var skipped []string
@@ -313,7 +315,7 @@ func (c *Composer) classifySelectedChunks() (map[int]bool, []string) {
 	indices := c.SelectedChunkIndices()
 	for k, r := range chunk.DecideRetentionAll(c.repoPath, c.chunksAt(indices)) {
 		i := indices[k]
-		if r.Decision == chunk.DecisionKeep {
+		if r.Decision == chunk.DecisionKeep && r.Reason != chunk.ReasonOnBinary {
 			applicable[i] = true
 			continue
 		}

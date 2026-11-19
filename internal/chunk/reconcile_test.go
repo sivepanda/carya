@@ -411,3 +411,139 @@ func TestStackTip(t *testing.T) {
 		}
 	})
 }
+
+var (
+	binaryKept   = Retention{DecisionKeep, "binary path still modified"}
+	binaryPruned = Retention{DecisionPrune, "binary path matches HEAD"}
+	onBinary     = Retention{DecisionKeep, "waits on an uncommitted binary change"}
+)
+
+const (
+	binaryBase = "\x00\x01binary\n"
+	asText     = "one\ntwo\n" // what the binary chunk turns data.bin into
+	textAbove  = "one\nTWO\n" // what the text chunk above it changes that to
+)
+
+// binaryChunk returns a chunk turning path from binary into its content on
+// disk, as the daemon records it: the hash is the blob of the file's latest
+// content.
+func binaryChunk(t *testing.T, repo, path string, at time.Time) Chunk {
+	t.Helper()
+	blob := strings.TrimSpace(gitRun(t, repo, "hash-object", "-w", "--", path))
+	return Chunk{
+		ID:        ChunkID(fmt.Sprintf("%s-bin-%d", path, at.UnixNano())),
+		FilePath:  path,
+		Diff:      fmt.Sprintf("Binary file %s has changed\n(Initial hash: 00000000, Latest hash: %s)", path, blob[:8]),
+		StartTime: at,
+		EndTime:   at.Add(time.Millisecond),
+		Hash:      ChunkHash(blob),
+	}
+}
+
+// recordOnBinary commits data.bin as a binary file, then records a binary
+// chunk that turns it into text and a text chunk diffed against that text.
+// The working tree is left with the text chunk's result, nothing staged.
+func recordOnBinary(t *testing.T, start time.Time) (repo string, bin, text Chunk) {
+	t.Helper()
+	repo = makeRepoWith(t, map[string]string{"data.bin": binaryBase})
+	writeRepoFile(t, repo, "data.bin", asText)
+	bin = binaryChunk(t, repo, "data.bin", start)
+	gitRun(t, repo, "add", "data.bin")
+	text = recordStack(t, repo, "data.bin", start.Add(time.Second), textAbove)[0]
+	writeRepoFile(t, repo, "data.bin", textAbove) // recordStack reset it
+	return repo, bin, text
+}
+
+func TestDecideRetentionAllTextChunkOnBinaryChunk(t *testing.T) {
+	start := time.Now()
+
+	t.Run("kept while the binary change is uncommitted", func(t *testing.T) {
+		repo, bin, text := recordOnBinary(t, start)
+		chunks := []Chunk{text, bin}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryKept, text.ID: onBinary,
+		})
+		checkTip(t, repo, "data.bin", chunks, textAbove)
+	})
+
+	t.Run("applicable once the binary change is committed", func(t *testing.T) {
+		repo, bin, text := recordOnBinary(t, start)
+		writeRepoFile(t, repo, "data.bin", asText)
+		commitAll(t, repo, "binary change")
+		writeRepoFile(t, repo, "data.bin", textAbove)
+
+		chunks := []Chunk{text, bin}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryKept, text.ID: keep,
+		})
+	})
+
+	t.Run("committed together prunes both", func(t *testing.T) {
+		repo, bin, text := recordOnBinary(t, start)
+		commitAll(t, repo, "both")
+
+		chunks := []Chunk{text, bin}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryPruned, text.ID: committed,
+		})
+	})
+
+	t.Run("reverted file prunes both", func(t *testing.T) {
+		repo, bin, text := recordOnBinary(t, start)
+		gitRun(t, repo, "checkout", "--", "data.bin")
+
+		chunks := []Chunk{text, bin}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryPruned, text.ID: noMatch,
+		})
+	})
+
+	t.Run("text chunks below the binary chunk are judged on HEAD", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"file.txt": stackBase})
+		below := recordStack(t, repo, "file.txt", start, stackVersions[0])[0]
+		writeRepoFile(t, repo, "file.txt", binaryBase)
+		bin := binaryChunk(t, repo, "file.txt", start.Add(time.Second))
+
+		chunks := []Chunk{bin, below}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryKept, below.ID: keep,
+		})
+	})
+
+	t.Run("binary file deleted then recreated as text", func(t *testing.T) {
+		repo := makeRepoWith(t, map[string]string{"data.bin": binaryBase})
+		bin := Chunk{
+			ID: "bin", FilePath: "data.bin", StartTime: start, Hash: "deleted-1",
+			Diff: "Binary file data.bin has changed\n(Initial hash: 00000000, Latest hash: 00000000)",
+		}
+		text := Chunk{
+			ID: "text", FilePath: "data.bin", StartTime: start.Add(time.Second),
+			Diff: "diff --git a/data.bin b/data.bin\nnew file mode 100644\n--- /dev/null\n+++ b/data.bin\n@@ -0,0 +1 @@\n+one\n",
+		}
+		writeRepoFile(t, repo, "data.bin", "one\n")
+
+		chunks := []Chunk{text, bin}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryKept, text.ID: onBinary,
+		})
+		checkTip(t, repo, "data.bin", chunks, "one\n")
+	})
+
+	t.Run("unknown binary content keeps the chunks above while the path is modified", func(t *testing.T) {
+		repo, bin, text := recordOnBinary(t, start)
+		bin.Hash = "gone"
+
+		chunks := []Chunk{text, bin}
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryKept, text.ID: onBinary,
+		})
+		if tip, ok := StackTip(repo, "data.bin", chunks); ok {
+			t.Fatalf("StackTip = %+v, want no tip on top of unknown binary content", tip)
+		}
+
+		gitRun(t, repo, "checkout", "--", "data.bin")
+		checkRetention(t, chunks, DecideRetentionAll(repo, chunks), map[ChunkID]Retention{
+			bin.ID: binaryPruned, text.ID: noMatch,
+		})
+	})
+}
