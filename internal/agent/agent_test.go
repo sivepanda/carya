@@ -179,3 +179,41 @@ func TestClaimSyncNeedsARemote(t *testing.T) {
 		t.Fatal("cloud sessions must not share state")
 	}
 }
+
+// Agent worktrees made from a checkout with sharing turned off must not push.
+func TestWorktreesInheritTeamSettings(t *testing.T) {
+	isolate(t)
+	repo := newRepo(t)
+	if err := os.MkdirAll(filepath.Join(repo, ".carya"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".carya", "team.json"), []byte(`{"auto_publish": true, "auto_fetch": false, "auto_push": false}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	remote := t.TempDir()
+	gitRun(t, remote, "init", "-q", "--bare")
+	gitRun(t, repo, "remote", "add", "origin", remote)
+	other := filepath.Join(t.TempDir(), "other")
+	gitRun(t, repo, "worktree", "add", "-q", other)
+
+	s, err := Bootstrap(other, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, why := s.Sharing(); ok || !strings.Contains(why, "turned off") {
+		t.Fatalf("worktree should inherit sharing off from the main checkout: %v %q", ok, why)
+	}
+
+	// Without settings in the main checkout, the defaults apply.
+	fresh := newRepo(t)
+	gitRun(t, fresh, "remote", "add", "origin", remote)
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitRun(t, fresh, "worktree", "add", "-q", wt)
+	s, err = Bootstrap(wt, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := s.Sharing(); !ok {
+		t.Fatal("defaults share through origin")
+	}
+}

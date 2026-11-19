@@ -46,7 +46,14 @@ func Bootstrap(dir, harness string) (*Session, error) {
 	}
 
 	if _, err := os.Stat(filepath.Join(repo.CaryaPath(), "team.json")); os.IsNotExist(err) {
+		// A linked worktree follows the main checkout's settings, so turning
+		// sharing off there also covers every agent worktree made from it.
 		cfg := config.TeamConfig{AutoPublish: true, AutoFetch: true, AutoPush: true}
+		if main := repo.MainWorktreeRoot(); main != repo.RootPath() {
+			if _, err := os.Stat(filepath.Join(main, ".carya", "team.json")); err == nil {
+				cfg = config.LoadTeamConfig(filepath.Join(main, ".carya"))
+			}
+		}
 		if err := config.SaveTeamConfig(repo.CaryaPath(), cfg); err != nil {
 			return nil, err
 		}
