@@ -35,6 +35,7 @@ type Hunk struct {
 	Diff    string `json:"diff"` // a change's hunk without the file header; the whole file's patch otherwise
 
 	fileHeader string // the file's diff header, for a change
+	numbers    []int  // for part of a hunk, the number in the whole hunk of each line of Diff
 	order      int    // position in List's result
 	digest     string // the content hash an ID starts with
 	line       int    // the line a change starts at in the working tree file

@@ -87,9 +87,7 @@ func printHunks(hs []hunks.Hunk, withDiff bool) {
 		}
 		fmt.Printf("    %s  %-72s +%d -%d\n", h.ID, hunkLabel(h), h.Added, h.Removed)
 		if withDiff && !binaryHunk(h) {
-			for _, line := range strings.Split(strings.TrimRight(h.Diff, "\n"), "\n") {
-				fmt.Printf("        %s\n", line)
-			}
+			printDiff(h)
 		}
 	}
 }
