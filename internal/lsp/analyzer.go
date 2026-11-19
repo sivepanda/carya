@@ -10,6 +10,7 @@ import (
 
 	"carya/internal/git"
 	"carya/internal/identity"
+	"carya/internal/peers"
 )
 
 type TeammateDiff struct {
@@ -27,8 +28,8 @@ type Analyzer struct {
 	caryaPath string
 	userID    string
 
-	refs      *git.RefManager
-	conflicts *git.ConflictPredictor
+	refs  *git.RefManager
+	peers *peers.Checker
 
 	mu      sync.RWMutex
 	reports map[string]*FileReport
@@ -49,7 +50,7 @@ func NewAnalyzer(repoPath, caryaPath string) (*Analyzer, error) {
 		caryaPath:     caryaPath,
 		userID:        uid,
 		refs:          git.NewRefManager(repoPath),
-		conflicts:     git.NewConflictPredictor(repoPath),
+		peers:         peers.NewChecker(repoPath),
 		reports:       make(map[string]*FileReport),
 		fetchInterval: 2 * time.Minute,
 	}
@@ -70,61 +71,34 @@ func (a *Analyzer) Refresh() error {
 		a.lastFetch = time.Now()
 	}
 
-	baseTree, err := a.refs.GetHEADTreeHash()
-	if err != nil {
-		return err
-	}
-
 	locallyModified, err := a.modifiedFiles()
 	if err != nil {
 		return err
 	}
 
-	localSet := make(map[string]bool, len(locallyModified))
-	for _, f := range locallyModified {
-		localSet[f] = true
+	// Each teammate is measured against the base their state records, and
+	// conflicts are predicted against your published state.
+	mine, err := a.refs.GetUserState(a.userID)
+	if err != nil {
+		mine = git.UserRef{}
 	}
-
-	myTree, _ := a.refs.GetUserTreeRef(a.userID)
-
-	teammates, err := a.refs.ListUserRefs()
+	changes, err := a.peers.ForPaths(a.userID, mine, locallyModified)
 	if err != nil {
 		return err
 	}
 
 	reports := make(map[string]*FileReport)
-
-	for _, teammate := range teammates {
-		if teammate.UserID == a.userID {
-			continue
+	for _, ch := range changes {
+		report := reports[ch.Path]
+		if report == nil {
+			report = &FileReport{}
+			reports[ch.Path] = report
 		}
-
-		theirChanges, err := a.conflicts.DiffTrees(baseTree, teammate.TreeHash)
-		if err != nil {
-			continue
-		}
-
-		conflictedFiles := a.predictConflictedFiles(baseTree, myTree, teammate.TreeHash)
-
-		for _, change := range theirChanges {
-			if !localSet[change.Path] {
-				continue
-			}
-
-			patch, _ := a.filePatch(baseTree, teammate.TreeHash, change.Path)
-
-			report := reports[change.Path]
-			if report == nil {
-				report = &FileReport{}
-				reports[change.Path] = report
-			}
-
-			report.Teammates = append(report.Teammates, TeammateDiff{
-				UserID:     teammate.UserID,
-				Patch:      patch,
-				IsConflict: conflictedFiles[change.Path],
-			})
-		}
+		report.Teammates = append(report.Teammates, TeammateDiff{
+			UserID:     ch.UserID,
+			Patch:      ch.Patch,
+			IsConflict: ch.Conflict,
+		})
 	}
 
 	a.mu.Lock()
@@ -140,57 +114,19 @@ func (a *Analyzer) ReportForFile(relativePath string) *FileReport {
 	return a.reports[relativePath]
 }
 
-func (a *Analyzer) predictConflictedFiles(baseTree, myTree, theirTree string) map[string]bool {
-	if myTree == "" {
-		return nil
-	}
-
-	report, err := a.conflicts.PredictConflicts(baseTree, myTree, theirTree)
-	if err != nil || !report.HasConflicts {
-		return nil
-	}
-
-	files := make(map[string]bool, len(report.ConflictedFiles))
-	for _, cf := range report.ConflictedFiles {
-		files[cf.Path] = true
-	}
-	return files
-}
-
+// modifiedFiles lists the files with staged or unstaged changes against HEAD.
 func (a *Analyzer) modifiedFiles() ([]string, error) {
-	unstaged := exec.Command("git", "diff", "--name-only", "HEAD")
-	unstaged.Dir = a.repoPath
-	unstagedOutput, err := unstaged.Output()
+	cmd := exec.Command("git", "diff", "--name-only", "-z", "HEAD")
+	cmd.Dir = a.repoPath
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
-
-	staged := exec.Command("git", "diff", "--name-only", "--staged", "HEAD")
-	staged.Dir = a.repoPath
-	stagedOutput, _ := staged.Output()
-
-	seen := make(map[string]bool)
 	var files []string
-
-	for _, raw := range [][]byte{unstagedOutput, stagedOutput} {
-		for _, name := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-			name = strings.TrimSpace(name)
-			if name != "" && !seen[name] {
-				seen[name] = true
-				files = append(files, name)
-			}
+	for _, name := range strings.Split(string(out), "\x00") {
+		if name != "" {
+			files = append(files, name)
 		}
 	}
-
 	return files, nil
-}
-
-func (a *Analyzer) filePatch(baseTree, theirTree, path string) (string, error) {
-	cmd := exec.Command("git", "diff-tree", "-p", baseTree, theirTree, "--", path)
-	cmd.Dir = a.repoPath
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return string(output), nil
 }

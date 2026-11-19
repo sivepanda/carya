@@ -4,12 +4,14 @@ package git
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ShadowRepo manages the shadow git repository stored in .carya/shadow/
@@ -134,7 +136,10 @@ func (s *ShadowRepo) GetIndexEntry(path string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cmd := exec.Command("git", "ls-files", "--cached", "-s", "--", path)
+	// Literal pathspec so names with glob characters (e.g. "[id].tsx") match
+	// only themselves. A pathspec also matches entries below a directory of
+	// that name, so only an exact path match counts.
+	cmd := exec.Command("git", "ls-files", "--cached", "-s", "-z", "--", ":(top,literal)"+path)
 	cmd.Env = s.gitEnv()
 
 	output, err := cmd.Output()
@@ -142,17 +147,19 @@ func (s *ShadowRepo) GetIndexEntry(path string) (string, error) {
 		return "", nil
 	}
 
-	line := strings.TrimSpace(string(output))
-	if line == "" {
-		return "", nil
+	// format: <mode> <hash> <stage>\t<path>\0
+	for record := range strings.SplitSeq(string(output), "\x00") {
+		meta, entryPath, ok := strings.Cut(record, "\t")
+		if !ok || entryPath != path {
+			continue
+		}
+		fields := strings.Fields(meta)
+		if len(fields) < 2 {
+			return "", nil
+		}
+		return fields[1], nil
 	}
-
-	// format: <mode> <hash> <stage>\t<path>
-	fields := strings.Fields(line)
-	if len(fields) < 2 {
-		return "", nil
-	}
-	return fields[1], nil
+	return "", nil
 }
 
 // GitDir returns the path to the shadow git directory.
@@ -200,10 +207,8 @@ func (s *ShadowRepo) UpdateIndex(path, blobHash, mode string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cmd := exec.Command("git", "update-index", "--add", "--cacheinfo", fmt.Sprintf("%s,%s,%s", mode, blobHash, path))
-	cmd.Env = s.gitEnv()
-
-	if output, err := cmd.CombinedOutput(); err != nil {
+	output, err := s.runIndexUpdate(nil, "update-index", "--add", "--cacheinfo", fmt.Sprintf("%s,%s,%s", mode, blobHash, path))
+	if err != nil {
 		log.Printf("Failed to update index: %v, output: %s", err, output)
 		return fmt.Errorf("failed to update index: %w\nOutput: %s", err, output)
 	}
@@ -211,17 +216,68 @@ func (s *ShadowRepo) UpdateIndex(path, blobHash, mode string) error {
 	return nil
 }
 
-// RemoveFromIndex removes a file from the git index.
+// RemoveFromIndex removes a file from the shadow index. Removing a path that
+// is not in the index is a no-op.
+//
+// The shadow repo is bare, so `update-index --remove`/`--force-remove` refuse
+// to run ("must be run in a work tree"). An --index-info record with mode 0
+// deletes the entry without consulting any work tree.
 func (s *ShadowRepo) RemoveFromIndex(path string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cmd := exec.Command("git", "update-index", "--remove", path)
-	cmd.Env = s.gitEnv()
-
-	// Ignore errors if file wasn't in index
-	cmd.Run()
+	record := "0 0000000000000000000000000000000000000000\t" + path + "\x00"
+	output, err := s.runIndexUpdate(strings.NewReader(record), "update-index", "-z", "--index-info")
+	if err != nil {
+		log.Printf("Failed to remove %s from shadow index: %v, output: %s", path, err, output)
+		return fmt.Errorf("failed to remove %s from index: %w\nOutput: %s", path, err, output)
+	}
 	return nil
+}
+
+// ListIndexPaths returns the shadow index entries at or below dir.
+func (s *ShadowRepo) ListIndexPaths(dir string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cmd := exec.Command("git", "ls-files", "-z", "--cached", "--", ":(top,literal)"+dir)
+	cmd.Env = s.gitEnv()
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list index paths under %s: %w", dir, err)
+	}
+
+	var paths []string
+	for p := range strings.SplitSeq(string(output), "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
+// runIndexUpdate runs an index-writing git command. Another process (e.g. a
+// concurrent `carya publish` running write-tree) can briefly hold
+// index.lock; retry a few times instead of silently dropping the update.
+func (s *ShadowRepo) runIndexUpdate(stdin *strings.Reader, args ...string) ([]byte, error) {
+	var (
+		output []byte
+		err    error
+	)
+	for attempt := 0; attempt < 5; attempt++ {
+		cmd := exec.Command("git", args...)
+		cmd.Env = s.gitEnv()
+		if stdin != nil {
+			stdin.Seek(0, io.SeekStart)
+			cmd.Stdin = stdin
+		}
+		output, err = cmd.CombinedOutput()
+		if err == nil || !bytes.Contains(output, []byte("index.lock")) {
+			return output, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
+	}
+	return output, err
 }
 
 // WriteTree writes the current index as a tree object and returns its hash.

@@ -31,13 +31,37 @@ func NewUserIdentity(caryaPath string) *UserIdentity {
 	}
 }
 
-// GetOrCreate returns the user ID, creating one if it doesn't exist.
-// Priority:
-// 1. Existing user-id file
-// 2. Git config user.name (sanitized)
-// 3. System username (sanitized)
-// 4. Generated UUID
+// AgentEnvVar names the environment variable that marks a checkout as driven
+// by a coding agent. Harness adapters set it (for example CARYA_AGENT=claude)
+// before Carya first runs in the checkout.
+const AgentEnvVar = "CARYA_AGENT"
+
+// GetOrCreate returns the identity of this checkout, creating one if it
+// doesn't exist. Each checkout (clone or linked worktree) has its own
+// .carya/user-id, so each agent working in its own checkout gets its own
+// identity. Priority:
+//  1. Existing user-id file
+//  2. CARYA_AGENT set: "<agent>-<8 random hex>", unique per checkout even
+//     when identical sandboxes share a user name and hostname
+//  3. A hash of the user (git user.name, then $USER, then a random value)
+//     and device, salted if another worktree or a published state already
+//     uses it
 func (u *UserIdentity) GetOrCreate() (string, error) {
+	return u.getOrCreate(agentFromEnv())
+}
+
+// GetOrCreateAgent is GetOrCreate for a checkout known to be driven by an
+// agent, such as from a harness hook. CARYA_AGENT, when set, still names the
+// agent; otherwise agent does. An existing identity is never replaced.
+func (u *UserIdentity) GetOrCreateAgent(agent string) (string, error) {
+	name := agentFromEnv()
+	if name == "" {
+		name = sanitizeAgentName(agent)
+	}
+	return u.getOrCreate(name)
+}
+
+func (u *UserIdentity) getOrCreate(agent string) (string, error) {
 	// Try existing file first
 	if data, err := os.ReadFile(u.idPath); err == nil {
 		id := strings.TrimSpace(string(data))
@@ -46,16 +70,21 @@ func (u *UserIdentity) GetOrCreate() (string, error) {
 		}
 	}
 
-	username := defaultUserIDSource()
-	if username == "" {
-		username = uuid.New().String()[:8]
+	var userID string
+	var err error
+	if agent != "" {
+		userID, err = u.generateAgentID(agent)
+	} else {
+		username := u.defaultUserIDSource()
+		if username == "" {
+			username = uuid.New().String()[:8]
+		}
+		identityText := buildDisplayName(username, configuredOrDefaultDeviceID(username))
+		userID, err = u.generateUniqueHash(identityText)
 	}
-
-	identityText := buildDisplayName(username, configuredOrDefaultDeviceID(username))
-	userID, err := u.generateUniqueHash(identityText)
 	if err != nil {
-		log.Printf("Failed to generate user ID hash: %v", err)
-		return "", fmt.Errorf("failed to generate user ID hash: %w", err)
+		log.Printf("Failed to generate user ID: %v", err)
+		return "", fmt.Errorf("failed to generate user ID: %w", err)
 	}
 
 	// Save the ID
@@ -119,10 +148,53 @@ func (u *UserIdentity) Exists() bool {
 	return err == nil
 }
 
-func defaultUserIDSource() string {
-	if name := gitUserName(); name != "" {
+// agentFromEnv returns the sanitized agent name from CARYA_AGENT, short
+// enough that "<agent>-<suffix>" stays a valid user ID.
+func agentFromEnv() string {
+	return sanitizeAgentName(os.Getenv(AgentEnvVar))
+}
+
+func sanitizeAgentName(name string) string {
+	agent := sanitizeUserID(name)
+	if len(agent) > 24 {
+		agent = strings.Trim(agent[:24], "-_")
+	}
+	return agent
+}
+
+func (u *UserIdentity) generateAgentID(agent string) (string, error) {
+	for i := 0; i < 12; i++ {
+		suffix, err := randomHex(4)
+		if err != nil {
+			return "", err
+		}
+		candidate := agent + "-" + suffix
+		if !u.userHashExists(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("could not create a collision-free agent ID")
+}
+
+func (u *UserIdentity) repoRoot() string {
+	return filepath.Dir(filepath.Dir(u.idPath))
+}
+
+func (u *UserIdentity) defaultUserIDSource() string {
+	if name := gitUserName(u.repoRoot()); name != "" {
 		return sanitizeUserID(name)
 	}
+	return envUserIDSource()
+}
+
+func defaultUserIDSource() string {
+	if name := gitUserName(""); name != "" {
+		return sanitizeUserID(name)
+	}
+	return envUserIDSource()
+}
+
+func envUserIDSource() string {
 
 	if username := os.Getenv("USER"); username != "" {
 		return sanitizeUserID(username)
@@ -135,8 +207,9 @@ func defaultUserIDSource() string {
 	return ""
 }
 
-func gitUserName() string {
+func gitUserName(dir string) string {
 	cmd := exec.Command("git", "config", "user.name")
+	cmd.Dir = dir
 	output, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -202,13 +275,42 @@ func (u *UserIdentity) userHashExists(userHash string) bool {
 	localRef := git.UserTreeRefPath(userHash)
 	remoteRef := git.RemoteUserTreeRefPath("origin", userHash)
 
-	return u.refExists(localRef) || u.refExists(remoteRef)
+	return u.refExists(localRef) || u.refExists(remoteRef) || u.siblingWorktreeUses(userHash)
 }
 
 func (u *UserIdentity) refExists(ref string) bool {
 	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", ref)
-	cmd.Dir = filepath.Dir(filepath.Dir(u.idPath))
+	cmd.Dir = u.repoRoot()
 	return cmd.Run() == nil
+}
+
+// siblingWorktreeUses reports whether another worktree of this repository
+// already holds userID. Worktrees share refs but each has its own .carya, so
+// two of them initialized before either publishes would otherwise derive the
+// same ID and overwrite each other's published state.
+func (u *UserIdentity) siblingWorktreeUses(userID string) bool {
+	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	cmd.Dir = u.repoRoot()
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	self, _ := filepath.EvalSymlinks(u.repoRoot())
+	for _, line := range strings.Split(string(output), "\n") {
+		path, ok := strings.CutPrefix(line, "worktree ")
+		if !ok {
+			continue
+		}
+		if resolved, err := filepath.EvalSymlinks(path); err == nil && resolved == self {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(path, ".carya", "user-id"))
+		if err == nil && strings.TrimSpace(string(data)) == userID {
+			return true
+		}
+	}
+	return false
 }
 
 func randomHex(byteLen int) (string, error) {

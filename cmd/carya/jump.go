@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,7 +13,9 @@ import (
 	"time"
 
 	"carya/internal/chunk"
+	"carya/internal/daemon"
 	"carya/internal/git"
+	"carya/internal/repository"
 	"carya/internal/tui"
 	"carya/internal/tui/shared"
 
@@ -29,6 +32,9 @@ var jumpUserFlag string
 type jumpState struct {
 	TargetUser string `json:"target_user"`
 	StashHash  string `json:"stash_hash"`
+	// DaemonWasRunning records that the jump paused the daemon, so leaving
+	// restarts it.
+	DaemonWasRunning bool `json:"daemon_was_running,omitempty"`
 }
 
 var jumpCmd = &cobra.Command{
@@ -112,20 +118,32 @@ Use --user if the username conflicts with a subcommand name.`,
 			}
 		}
 
+		// Stop the daemon before touching the working tree: otherwise it
+		// records the stash and the teammate's files as our own chunks and
+		// auto-publishes them as our state.
+		daemonWasRunning, err := pauseDaemon(repo)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error stopping the Carya daemon before jumping: %v\n", err)
+			os.Exit(1)
+		}
+
 		stashHash := ""
 		if hasChanges {
 			hash, err := stashLocalChanges(repo.RootPath(), targetUser)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error stashing local changes: %v\n", err)
+				resumeDaemon(repo, daemonWasRunning)
 				os.Exit(1)
 			}
 			stashHash = hash
 		}
-		if err := writeJumpState(repo.CaryaPath(), jumpState{TargetUser: targetUser, StashHash: stashHash}); err != nil {
+		state := jumpState{TargetUser: targetUser, StashHash: stashHash, DaemonWasRunning: daemonWasRunning}
+		if err := writeJumpState(repo.CaryaPath(), state); err != nil {
 			if stashHash != "" {
 				_ = restoreStash(repo.RootPath(), stashHash)
 			}
 			fmt.Fprintf(os.Stderr, "Error recording jump state: %v\n", err)
+			resumeDaemon(repo, daemonWasRunning)
 			os.Exit(1)
 		}
 
@@ -147,11 +165,16 @@ Use --user if the username conflicts with a subcommand name.`,
 			}
 			if err := clearJumpState(repo.CaryaPath()); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: could not clear jump state: %v\n", err)
+			} else {
+				resumeDaemon(repo, daemonWasRunning)
 			}
 			os.Exit(1)
 		}
 
 		fmt.Printf("\nSuccessfully jumped to %s's working state.\n", targetUser)
+		if daemonWasRunning {
+			fmt.Println("The Carya daemon is paused until you leave the jump.")
+		}
 		fmt.Println("Your working directory now reflects their changes.")
 		if stashHash != "" {
 			fmt.Println("\nYour local changes were stashed before the jump.")
@@ -170,6 +193,13 @@ var jumpLeaveCmd = &cobra.Command{
 	Long:  `Restore your working directory to HEAD and pop any auto-created jump stash.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		repo := mustInitializedRepo()
+
+		// Restoring HEAD discards working-tree changes, so only do it when a
+		// jump actually put the teammate's state there.
+		if !jumpInProgress(repo.CaryaPath()) {
+			fmt.Println("No jump is active; nothing to leave.")
+			return
+		}
 
 		state, err := readJumpState(repo.CaryaPath())
 		if err != nil {
@@ -193,7 +223,36 @@ var jumpLeaveCmd = &cobra.Command{
 		}
 
 		fmt.Println("Returned to HEAD state.")
+		resumeDaemon(repo, state.DaemonWasRunning)
 	},
+}
+
+// pauseDaemon stops the daemon if it is running and waits for it to exit,
+// reporting whether it was running.
+func pauseDaemon(repo *repository.Repository) (bool, error) {
+	d := daemon.New(repo.PIDPath(), repo.LogPath())
+	if !d.IsRunning() {
+		return false, nil
+	}
+	fmt.Println("Pausing the Carya daemon for the jump...")
+	if err := d.Stop(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// resumeDaemon restarts the daemon if pauseDaemon stopped it.
+func resumeDaemon(repo *repository.Repository, wasRunning bool) {
+	if !wasRunning {
+		return
+	}
+	d := daemon.New(repo.PIDPath(), repo.LogPath())
+	if err := d.Start([]string{"daemon"}); err != nil && !errors.Is(err, daemon.ErrAlreadyRunning) {
+		fmt.Fprintf(os.Stderr, "Warning: could not restart the Carya daemon: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Start it with 'carya start'.")
+		return
+	}
+	fmt.Println("Carya daemon resumed.")
 }
 
 var jumpViewCmd = &cobra.Command{
@@ -581,54 +640,15 @@ func objectExists(repoPath, hash string) bool {
 	return cmd.Run() == nil
 }
 
+// checkoutTree makes the index and the working tree match treeish exactly:
+// tracked files missing from treeish are removed, not just left behind as
+// `git checkout <tree> -- .` would. Untracked files are not touched.
 func checkoutTree(repoPath, treeish string) error {
-	cmd := exec.Command("git", "checkout", treeish, "--", ".")
+	cmd := exec.Command("git", "read-tree", "--reset", "-u", treeish)
 	cmd.Dir = repoPath
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		return nil
-	}
-
-	if !strings.Contains(string(output), "did not match any file") {
+	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w\nOutput: %s", err, output)
 	}
-
-	treeCmd := exec.Command("git", "rev-parse", treeish+"^{tree}")
-	treeCmd.Dir = repoPath
-	treeOut, treeErr := treeCmd.Output()
-	if treeErr != nil {
-		return fmt.Errorf("%w\nOutput: %s", err, output)
-	}
-	treeHash := strings.TrimSpace(string(treeOut))
-
-	lsTreeCmd := exec.Command("git", "ls-tree", "-r", "--name-only", treeHash)
-	lsTreeCmd.Dir = repoPath
-	lsOut, lsErr := lsTreeCmd.Output()
-	if lsErr != nil {
-		return fmt.Errorf("%w\nOutput: %s", err, output)
-	}
-	if strings.TrimSpace(string(lsOut)) != "" {
-		return fmt.Errorf("%w\nOutput: %s", err, output)
-	}
-
-	lsFilesCmd := exec.Command("git", "ls-files", "-z")
-	lsFilesCmd.Dir = repoPath
-	trackedOut, trackedErr := lsFilesCmd.Output()
-	if trackedErr != nil {
-		return trackedErr
-	}
-
-	for _, rel := range strings.Split(string(trackedOut), "\x00") {
-		rel = strings.TrimSpace(rel)
-		if rel == "" {
-			continue
-		}
-		abs := filepath.Join(repoPath, rel)
-		if remErr := os.Remove(abs); remErr != nil && !os.IsNotExist(remErr) {
-			return remErr
-		}
-	}
-
 	return nil
 }
 

@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/sivepanda/mycelia v0.0.2
+	github.com/sivepanda/mycelia v0.0.4
 	github.com/spf13/cobra v1.10.2
 	modernc.org/sqlite v1.47.0
 )

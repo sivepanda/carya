@@ -9,6 +9,8 @@ import (
 	"carya/internal/identity"
 	"carya/internal/store"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -97,6 +99,109 @@ func (e *Engine) OnFileChange(path string, contents []byte) {
 	e.chunkManager.OnFileChange(event)
 }
 
+// TrackedPaths returns the files the shadow index tracks at or below dir. The
+// watcher uses it to expand a removed or renamed directory, whose contents it
+// can no longer list, into per-file deletions.
+func (e *Engine) TrackedPaths(dir string) []string {
+	if e.shadow == nil {
+		return nil
+	}
+	paths, err := e.shadow.ListIndexPaths(dir)
+	if err != nil {
+		log.Printf("Failed to list tracked paths under %s: %v", dir, err)
+		return nil
+	}
+	return paths
+}
+
+// ReconcileWorkingTree brings the shadow index (and so the published state)
+// in line with the working tree when the daemon starts. The index is seeded
+// from HEAD, which on its own would drop every uncommitted change made before
+// the daemon started (at init, or before a restart).
+//
+// shouldTrack applies the watcher's filters so startup tracks exactly what the
+// watcher would. Every changed file is fed through the chunk pipeline so its
+// changes can be composed. Files without chunks are diffed against HEAD. A
+// file with stored chunks is diffed against the top of its chunk stack (HEAD
+// plus the chunks sync would keep), so edits made while the daemon was down
+// become a chunk of their own that stacks on the existing ones, and the next
+// chunk does too. When that stack no longer applies, the file's chunks are
+// assumed to cover it and only its index entry is aligned with disk.
+func (e *Engine) ReconcileWorkingTree(repoRoot string, shouldTrack func(relPath string) bool) error {
+	if e.shadow == nil {
+		return nil
+	}
+
+	paths, err := git.WorkingTreeChanges(repoRoot)
+	if err != nil {
+		return err
+	}
+
+	chunked, stacked, aligned := 0, 0, 0
+	for _, rel := range paths {
+		if shouldTrack != nil && !shouldTrack(rel) {
+			continue
+		}
+
+		contents, readErr := os.ReadFile(filepath.Join(repoRoot, rel))
+		if readErr != nil && !os.IsNotExist(readErr) {
+			// Directories (e.g. submodules) and unreadable files are skipped,
+			// matching what the watcher does.
+			continue
+		}
+		if os.IsNotExist(readErr) {
+			contents = nil
+		} else if contents == nil {
+			contents = []byte{}
+		}
+
+		existing, err := e.store.FindChunks(rel)
+		if err != nil {
+			log.Printf("Reconcile: could not look up chunks for %s: %v", rel, err)
+		}
+		if len(existing) == 0 {
+			e.OnFileChange(rel, contents)
+			chunked++
+			continue
+		}
+
+		if tip, ok := chunk.StackTip(repoRoot, rel, existing); ok {
+			if tip.Exists {
+				err = e.shadow.UpdateIndex(rel, tip.Blob, "100644")
+			} else {
+				err = e.shadow.RemoveFromIndex(rel)
+			}
+			if err == nil {
+				// Records whatever disk has beyond the stack's top, if
+				// anything, as a new chunk on top of it.
+				e.OnFileChange(rel, contents)
+				stacked++
+				continue
+			}
+			log.Printf("Reconcile: could not move shadow index to the chunk stack for %s: %v", rel, err)
+		}
+
+		if contents == nil {
+			err = e.shadow.RemoveFromIndex(rel)
+		} else {
+			var blob string
+			if blob, err = e.shadow.HashObject(contents); err == nil {
+				err = e.shadow.UpdateIndex(rel, blob, "100644")
+			}
+		}
+		if err != nil {
+			log.Printf("Reconcile: could not align shadow index for %s: %v", rel, err)
+			continue
+		}
+		aligned++
+	}
+
+	if chunked+stacked+aligned > 0 {
+		log.Printf("Reconciled working tree: %d new change(s) tracked, %d already-chunked file(s) checked on top of their chunks, %d aligned", chunked, stacked, aligned)
+	}
+	return nil
+}
+
 // ForceFlush immediately creates and saves a chunk for the specified file path.
 // Returns an error if the chunk cannot be created or saved.
 func (e *Engine) ForceFlush(filePath string) error {
@@ -124,7 +229,8 @@ func (e *Engine) PublishState() error {
 		return err
 	}
 
-	return e.refManager.UpdateUserTreeRef(e.userID, treeHash)
+	_, err = e.refManager.PublishUserState(e.userID, treeHash)
+	return err
 }
 
 // PublishAndPushState writes the current working tree to a git ref and pushes

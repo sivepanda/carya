@@ -253,7 +253,16 @@ func (s *GitStrategy) handleDelete(event FileChangeEvent, active *activeChunk, e
 	}
 
 	if baselineHash == "" {
-		// Deleting an untracked file creates no meaningful chunk.
+		// Deleting a file that has no baseline creates no meaningful chunk,
+		// but a file created and then removed within one chunk must still
+		// leave the shadow index, or it lingers in the published state.
+		if exists {
+			delete(s.activeChunks, event.Path)
+			if s.shadow != nil {
+				_ = s.shadow.RemoveFromIndex(event.Path)
+			}
+			log.Printf("Discarded chunk for file created and removed: %s", event.Path)
+		}
 		return
 	}
 

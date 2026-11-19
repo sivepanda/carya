@@ -44,12 +44,13 @@ func runChunkSync(repoPath, dbPath string) (syncResult, error) {
 		return syncResult{}, err
 	}
 
+	// Decide all chunks together: a file's later chunks are recorded on top of
+	// its earlier ones, so they can only be judged as a stack.
 	var pruneIDs []chunk.ChunkID
 	kept := 0
-	for _, c := range chunks {
-		decision, _ := chunk.DecideRetention(repoPath, c)
-		if decision == chunk.DecisionPrune {
-			pruneIDs = append(pruneIDs, c.ID)
+	for i, r := range chunk.DecideRetentionAll(repoPath, chunks) {
+		if r.Decision == chunk.DecisionPrune {
+			pruneIDs = append(pruneIDs, chunks[i].ID)
 			continue
 		}
 		kept++

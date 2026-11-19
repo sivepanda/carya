@@ -13,12 +13,12 @@ import (
 // Housekeeping is a thin controller that drives mycelia's Setup primitive.
 // It owns all key dispatch and delegates state/rendering to the primitive.
 type Housekeeping struct {
-	keys     tui.KeyMap
-	help     help.Model
-	showAll  bool
-	setup    primitives.Setup
-	width    int
-	height   int
+	keys    tui.KeyMap
+	help    help.Model
+	showAll bool
+	setup   primitives.Setup
+	width   int
+	height  int
 }
 
 // NewHousekeeping creates a new housekeeping model.

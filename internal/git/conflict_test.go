@@ -55,3 +55,24 @@ func TestPredictionFromTreesPreservesRepositoryState(t *testing.T) {
 		})
 	}
 }
+
+func TestDiffTreesKeepsUnusualPaths(t *testing.T) {
+	repo := createMainRepo(t)
+	base := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD^{tree}"))
+	tree := treeWith(t, repo, "HEAD", map[string]string{
+		"with space.txt": "x\n",
+		"naïve.txt":      "y\n",
+		"tracked.txt":    "changed\n",
+	})
+	diffs, err := NewConflictPredictor(repo).DiffTrees(base, tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, d := range diffs {
+		got[d.Path] = d.Status
+	}
+	if got["with space.txt"] != "A" || got["naïve.txt"] != "A" || got["tracked.txt"] != "M" || len(got) != 3 {
+		t.Fatalf("DiffTrees = %+v", diffs)
+	}
+}

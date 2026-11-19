@@ -56,7 +56,12 @@ Use --fetch to first fetch the latest refs from origin.`,
 				marker = "* "
 			}
 			fmt.Printf("%s%s\n", marker, ref.UserID)
-			fmt.Printf("    Tree: %s\n", ref.TreeHash[:12])
+			fmt.Printf("    Tree: %s\n", shortHash(ref.TreeHash))
+			if ref.HasBase() {
+				fmt.Printf("    Base: %s\n", shortHash(ref.BaseCommit))
+			} else {
+				fmt.Printf("    Base: unknown (published by an older carya)\n")
+			}
 		}
 		fmt.Println()
 		fmt.Println("* = you")
@@ -86,29 +91,35 @@ This uses git merge-tree to simulate a merge without actually modifying any file
 
 		refManager := git.NewRefManager(repo.RootPath())
 
-		// Get both users' tree hashes
-		myTree, err := refManager.GetUserTreeRef(currentUserID)
+		// Get both users' published states
+		mine, err := refManager.GetUserState(currentUserID)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: You haven't published your state yet. Run 'carya publish' first.\n")
 			os.Exit(1)
 		}
 
-		theirTree, err := refManager.GetUserTreeRef(targetUser)
+		theirs, err := refManager.GetUserState(targetUser)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: User '%s' hasn't published their state.\n", targetUser)
 			os.Exit(1)
 		}
 
-		// Get the base tree (HEAD)
-		baseTree, err := refManager.GetHEADTreeHash()
+		// Each state is compared against the base it records. HEAD is only
+		// the fallback for states published before bases were recorded.
+		head, err := refManager.ResolveRef("HEAD")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting base tree: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error resolving HEAD: %v\n", err)
 			os.Exit(1)
+		}
+		for _, state := range []git.UserRef{mine, theirs} {
+			if !state.HasBase() {
+				fmt.Fprintf(os.Stderr, "Warning: %s's state records no base; assuming your HEAD. Republish to fix.\n", state.UserID)
+			}
 		}
 
 		// Check for overlapping files first
 		predictor := git.NewConflictPredictor(repo.RootPath())
-		overlapping, err := predictor.OverlapsWith(baseTree, myTree, theirTree)
+		overlapping, err := predictor.OverlapsWith(mine.Base(head), mine.TreeHash, theirs.Base(head), theirs.TreeHash)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error checking overlaps: %v\n", err)
 			os.Exit(1)
@@ -126,7 +137,7 @@ This uses git merge-tree to simulate a merge without actually modifying any file
 		fmt.Println()
 
 		// Predict actual conflicts
-		report, err := predictor.PredictConflicts(baseTree, myTree, theirTree)
+		report, err := predictor.PredictStateConflicts(mine, theirs, head)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error predicting conflicts: %v\n", err)
 			os.Exit(1)

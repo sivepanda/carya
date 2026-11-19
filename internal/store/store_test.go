@@ -62,6 +62,43 @@ func TestSQLiteStoreSaveFindRecentAndDelete(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreGetChunksOfRecentFiles(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+
+	// Oldest first; created_at is set explicitly since SQLite records it at
+	// one-second resolution.
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i, c := range []chunk.Chunk{
+		{ID: "a1", FilePath: "a.txt", Diff: "d", StartTime: now, EndTime: now, Hash: "h"},
+		{ID: "c1", FilePath: "c.txt", Diff: "d", StartTime: now, EndTime: now, Hash: "h"},
+		{ID: "b1", FilePath: "b.txt", Diff: "d", StartTime: now, EndTime: now, Hash: "h"},
+		{ID: "a2", FilePath: "a.txt", Diff: "d", StartTime: now, EndTime: now, Hash: "h"},
+	} {
+		if err := s.SaveChunk(c); err != nil {
+			t.Fatalf("save chunk %s: %v", c.ID, err)
+		}
+		at := created.Add(time.Duration(i) * time.Second).Format("2006-01-02 15:04:05")
+		if _, err := s.db.Exec("UPDATE chunks SET created_at = ? WHERE id = ?", at, string(c.ID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The two most recent chunks are a2 and b1: all of a.txt's and b.txt's
+	// chunks are returned, c.txt's are not.
+	got, err := s.GetChunksOfRecentFiles(2)
+	if err != nil {
+		t.Fatalf("get chunks of recent files: %v", err)
+	}
+	var ids []chunk.ChunkID
+	for _, c := range got {
+		ids = append(ids, c.ID)
+	}
+	if want := []chunk.ChunkID{"a2", "b1", "a1"}; len(ids) != len(want) || ids[0] != want[0] || ids[1] != want[1] || ids[2] != want[2] {
+		t.Fatalf("got %v, want %v", ids, want)
+	}
+}
+
 func TestSQLiteStoreFeatureLabelOperations(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Now().UTC()

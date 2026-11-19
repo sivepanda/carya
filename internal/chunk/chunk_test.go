@@ -89,6 +89,30 @@ func TestGitStrategyDeleteFromTrackedFile(t *testing.T) {
 	if strings.TrimSpace(chunk.Diff) == "" {
 		t.Fatal("expected non-empty deletion diff")
 	}
+	// The published state is written from the shadow index, so the deleted
+	// file must be gone from it too.
+	if hash, _ := shadow.GetIndexEntry("tracked.txt"); hash != "" {
+		t.Fatalf("expected tracked.txt removed from shadow index, still at %s", hash)
+	}
+}
+
+func TestGitStrategyCreatedThenRemovedLeavesNoTrace(t *testing.T) {
+	_, shadow := makeShadowReadyRepo(t)
+	s := NewGitStrategy(shadow)
+	now := time.Now()
+
+	s.OnFileChange(FileChangeEvent{Path: "scratch.txt", Contents: []byte("temp\n"), Time: now})
+	if hash, _ := shadow.GetIndexEntry("scratch.txt"); hash == "" {
+		t.Fatal("expected new file to be added to the shadow index")
+	}
+
+	s.OnFileChange(FileChangeEvent{Path: "scratch.txt", Contents: nil, Time: now.Add(time.Second)})
+	if chunk := s.ForceFlush("scratch.txt"); chunk != nil {
+		t.Fatalf("expected no chunk for a file created and removed, got %+v", chunk)
+	}
+	if hash, _ := shadow.GetIndexEntry("scratch.txt"); hash != "" {
+		t.Fatalf("expected scratch.txt removed from shadow index, still at %s", hash)
+	}
 }
 
 func TestGitStrategyTracksNewUnversionedFile(t *testing.T) {

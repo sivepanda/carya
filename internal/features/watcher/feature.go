@@ -30,6 +30,11 @@ func (wf *WatcherFeature) InitializeWithEngine(repo *repository.Repository, eng 
 }
 
 // Start begins file watching
+// Watcher returns the underlying watcher (nil before InitializeWithEngine).
+func (wf *WatcherFeature) Watcher() *watcher.Watcher {
+	return wf.watcher
+}
+
 func (wf *WatcherFeature) Start() error {
 	if wf.watcher != nil {
 		return wf.watcher.Start(wf.repo.RootPath())
