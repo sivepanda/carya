@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"carya/internal/git"
+	"carya/internal/peers"
 )
 
 func gitIn(t *testing.T, dir string, env []string, stdin string, args ...string) string {
@@ -57,7 +58,7 @@ func newTestAnalyzer(repo, userID string) *Analyzer {
 		repoPath:      repo,
 		userID:        userID,
 		refs:          git.NewRefManager(repo),
-		conflicts:     git.NewConflictPredictor(repo),
+		peers:         peers.NewChecker(repo),
 		reports:       make(map[string]*FileReport),
 		lastFetch:     time.Now(),
 		fetchInterval: time.Hour,
