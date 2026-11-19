@@ -265,6 +265,8 @@ func Select(all []Hunk, refs []string) ([]Hunk, error) {
 	}
 	picked := map[int]bool{}
 	var unknown, ambiguous []string
+	lines := map[int]map[int]bool{} // the lines "<id>:<ranges>" picks of a hunk
+	var badLines []string           // what is wrong with such refs
 	for _, ref := range refs {
 		if i, ok := byID[ref]; ok {
 			picked[i] = true
@@ -292,8 +294,48 @@ func Select(all []Hunk, refs []string) ([]Hunk, error) {
 			ambiguous = append(ambiguous, fmt.Sprintf("%s (now %s)", ref, strings.Join(copies, ", ")))
 			continue
 		}
+		// "<id>:<ranges>" selects some lines of a hunk; see part.
+		if id, ranges, ok := cutRanges(ref); ok {
+			i, found := byID[id]
+			if !found {
+				i, found = atLine(all, byDigest, id)
+			}
+			switch {
+			case found:
+				keep, err := lineRanges(all[i], ranges)
+				if err != nil {
+					badLines = append(badLines, ref+": "+err.Error())
+					continue
+				}
+				if lines[i] == nil {
+					lines[i] = map[int]bool{}
+				}
+				for n := range keep {
+					lines[i][n] = true
+				}
+				continue
+			case len(byDigest[id]) > 1:
+				ambiguous = append(ambiguous, fmt.Sprintf("%s (now %s)", ref, strings.Join(idsOf(all, byDigest[id]), ", ")))
+				continue
+			case len(idsOfPath(all, id)) > 0:
+				badLines = append(badLines, fmt.Sprintf("%s: line ranges go after a hunk ID, not a file name; %s has %s", ref, id, strings.Join(idsOfPath(all, id), ", ")))
+				continue
+			}
+		}
 		unknown = append(unknown, ref)
 	}
+	parts := map[int]Hunk{}
+	for i := range all {
+		if lines[i] != nil && !picked[i] {
+			p, err := part(all[i], lines[i])
+			if err != nil {
+				badLines = append(badLines, err.Error())
+				continue
+			}
+			parts[i] = p
+		}
+	}
+
 	var problems []string
 	if len(unknown) > 0 {
 		problems = append(problems, "no hunk or changed file matches "+strings.Join(unknown, ", "))
@@ -302,12 +344,17 @@ func Select(all []Hunk, refs []string) ([]Hunk, error) {
 		problems = append(problems, "identical hunks share the ID "+strings.Join(ambiguous, "; "))
 	}
 	if len(problems) > 0 {
-		return nil, fmt.Errorf("%s; run `carya hunks` for current IDs", strings.Join(problems, "; "))
+		return nil, fmt.Errorf("%s; run `carya hunks` for current IDs", strings.Join(append(problems, badLines...), "; "))
 	}
-	out := make([]Hunk, 0, len(picked))
+	if len(badLines) > 0 {
+		return nil, errors.New(strings.Join(badLines, "; "))
+	}
+	out := make([]Hunk, 0, len(picked)+len(parts))
 	for i := range all {
 		if picked[i] {
 			out = append(out, all[i])
+		} else if p, ok := parts[i]; ok {
+			out = append(out, p)
 		}
 	}
 	return out, nil
