@@ -97,18 +97,31 @@ func absPaths(dir string, paths []string) []string {
 // editReport is what an agent is told about peers before (or right after)
 // it edits paths, or "" when nobody else is changing them.
 //
-// With a session ID, a change the session was already told about (same
-// peer, same change, same conflict verdict) is not repeated, so an agent
-// editing a file several times hears about each peer change once.
+// With a session key, notes are not repeated: a peer change the agent was
+// already shown is left out, and a newer version of a peer's change to a file
+// it already heard about is one line (with the current conflict verdict)
+// rather than the whole diff again.
 func editReport(s *agent.Session, paths []string, now time.Time, session string) (string, error) {
 	changes, err := s.Check(paths)
 	if err != nil || len(changes) == 0 {
 		return "", err
 	}
-	if changes = unseen(s, session, changes); len(changes) == 0 {
+	fresh, updated := unseen(s, session, changes)
+	if len(fresh)+len(updated) == 0 {
 		return "", nil
 	}
-	report := "Carya: " + peers.Summary(changes, now)
+	var b strings.Builder
+	b.WriteString("Carya: ")
+	b.WriteString(peers.Summary(fresh, now))
+	for _, ch := range updated {
+		verdict := "it still merges cleanly with your changes"
+		if ch.Conflict {
+			verdict = "it would CONFLICT with your changes"
+		}
+		fmt.Fprintf(&b, "%s updated their unfinished change to %s (published %s ago); %s. Run `carya check %s` to see it.\n",
+			ch.UserID, ch.Path, now.Sub(ch.Published).Round(time.Second), verdict, ch.Path)
+	}
+	report := b.String()
 	if len(report) > maxContext {
 		report = strings.ToValidUTF8(report[:maxContext], "") +
 			"\n… (truncated; run `carya check " + changes[0].Path + "` for the full diff)\n"
@@ -116,11 +129,24 @@ func editReport(s *agent.Session, paths []string, now time.Time, session string)
 	return report, nil
 }
 
-// unseen drops the changes this session was already shown and records the
-// rest as shown.
-func unseen(s *agent.Session, session string, changes []peers.Change) []peers.Change {
+// sessionKey identifies who is told: the session, and the subagent within
+// it, since subagents share their parent's session ID.
+func sessionKey(sessionID, agentID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	if agentID == "" {
+		return sessionID
+	}
+	return sessionID + "/" + agentID
+}
+
+// unseen sorts changes into ones the session has never heard of (fresh),
+// newer versions of changes it already heard about (updated), and repeats,
+// which are dropped. It records what it returns as seen.
+func unseen(s *agent.Session, session string, changes []peers.Change) (fresh, updated []peers.Change) {
 	if session == "" {
-		return changes
+		return changes, nil
 	}
 	sum := sha1.Sum([]byte(session))
 	path := filepath.Join(s.Repo.CaryaPath(), "notified", hex.EncodeToString(sum[:8])+".json")
@@ -128,22 +154,29 @@ func unseen(s *agent.Session, session string, changes []peers.Change) []peers.Ch
 	if data, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(data, &seen)
 	}
-	var fresh []peers.Change
-	for _, ch := range changes {
-		k := sha1.Sum([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%t\x00%s", ch.Path, ch.UserID, ch.Status, ch.Conflict, ch.Patch)))
-		key := hex.EncodeToString(k[:])
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		fresh = append(fresh, ch)
+	digest := func(parts ...any) string {
+		k := sha1.Sum([]byte(fmt.Sprint(parts...)))
+		return hex.EncodeToString(k[:])
 	}
-	if len(fresh) > 0 {
+	for _, ch := range changes {
+		exact := digest("exact\x00", ch.Path, "\x00", ch.UserID, "\x00", ch.Status, "\x00", ch.Conflict, "\x00", ch.Patch)
+		who := digest("who\x00", ch.Path, "\x00", ch.UserID)
+		switch {
+		case seen[exact]:
+			continue
+		case seen[who]:
+			updated = append(updated, ch)
+		default:
+			fresh = append(fresh, ch)
+		}
+		seen[exact], seen[who] = true, true
+	}
+	if len(fresh)+len(updated) > 0 {
 		if data, err := json.Marshal(seen); err == nil && os.MkdirAll(filepath.Dir(path), 0755) == nil {
 			_ = os.WriteFile(path, data, 0644)
 		}
 	}
-	return fresh
+	return fresh, updated
 }
 
 // toolsHint tells the agent which history and commit commands it can run.
