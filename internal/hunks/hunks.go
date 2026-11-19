@@ -9,8 +9,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -28,10 +29,12 @@ type Hunk struct {
 	Header  string `json:"header,omitempty"` // the @@ line for a change
 	Added   int    `json:"added"`
 	Removed int    `json:"removed"`
-	Diff    string `json:"diff"` // the hunk alone, without the file header
+	Diff    string `json:"diff"` // a change's hunk without the file header; the whole file's patch otherwise
 
-	fileHeader string
-	order      int
+	fileHeader string // the file's diff header, for a change
+	order      int    // position in List's result
+	digest     string // the content hash an ID starts with
+	line       int    // the line a change starts at in the working tree file
 }
 
 // List returns the working tree's changes against HEAD as hunks, in file
@@ -53,7 +56,7 @@ func List(repoRoot string) ([]Hunk, error) {
 	return parse(diff)
 }
 
-var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@`)
+var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
 func parse(diff string) ([]Hunk, error) {
 	var out []Hunk
@@ -155,10 +158,9 @@ func parseFile(path string, section []string) []Hunk {
 	}
 
 	// Whole-file changes cannot be split: they are one hunk.
-	if kind != "change" || h == len(section) {
-		whole := strings.Join(section, "")
+	if kind != "change" {
 		added, removed := count(section[h:])
-		return []Hunk{{Path: path, Kind: kind, Added: added, Removed: removed, Diff: whole, fileHeader: ""}}
+		return []Hunk{{Path: path, Kind: kind, Added: added, Removed: removed, Diff: strings.Join(section, "")}}
 	}
 
 	var hunks []Hunk
@@ -169,6 +171,7 @@ func parseFile(path string, section []string) []Hunk {
 		}
 		body := section[h:end]
 		added, removed := count(body[1:])
+		line, _ := strconv.Atoi(hunkHeader.FindStringSubmatch(body[0])[1])
 		hunks = append(hunks, Hunk{
 			Path:       path,
 			Kind:       "change",
@@ -177,6 +180,7 @@ func parseFile(path string, section []string) []Hunk {
 			Removed:    removed,
 			Diff:       strings.Join(body, ""),
 			fileHeader: header,
+			line:       line,
 		})
 		h = end
 	}
@@ -200,9 +204,11 @@ func count(lines []string) (added, removed int) {
 
 // assignIDs gives each hunk a short ID from its path and content, leaving
 // out line numbers, so a hunk keeps its ID while other hunks are committed
-// around it.
+// around it. Hunks with identical content get the line they start at in the
+// working tree file added ("abc1234@40"): committing other hunks never moves
+// that line, and Select still takes the form once the hunk is unique.
 func assignIDs(hunks []Hunk) {
-	seen := map[string]int{}
+	copies := map[string]int{}
 	for i := range hunks {
 		h := &hunks[i]
 		h.order = i
@@ -211,7 +217,18 @@ func assignIDs(hunks []Hunk) {
 			_, body, _ = strings.Cut(h.Diff, "\n") // drop the @@ line
 		}
 		sum := sha1.Sum([]byte(h.Path + "\x00" + body))
-		id := hex.EncodeToString(sum[:])[:7]
+		h.digest = hex.EncodeToString(sum[:])[:7]
+		copies[h.digest]++
+	}
+	seen := map[string]int{}
+	for i := range hunks {
+		h := &hunks[i]
+		id := h.digest
+		if copies[h.digest] > 1 && h.line > 0 {
+			id += "@" + strconv.Itoa(h.line)
+		}
+		// Whole files have no line to tell them apart; a short hash can
+		// also collide. Number what is left over.
 		seen[id]++
 		if n := seen[id]; n > 1 {
 			id += "-" + strconv.Itoa(n)
@@ -222,38 +239,81 @@ func assignIDs(hunks []Hunk) {
 
 // Select resolves hunk IDs and file paths to hunks. A path selects every
 // hunk of that file. It fails on anything that matches nothing, which is
-// usually an ID from before the working tree changed.
+// usually an ID from before the working tree changed, and on an ID that now
+// matches several identical hunks.
 func Select(all []Hunk, refs []string) ([]Hunk, error) {
-	byID := map[string]Hunk{}
-	byPath := map[string][]Hunk{}
-	for _, h := range all {
-		byID[h.ID] = h
-		byPath[h.Path] = append(byPath[h.Path], h)
+	byID := map[string]int{}
+	byDigest := map[string][]int{}
+	byPath := map[string][]int{}
+	for i, h := range all {
+		byID[h.ID] = i
+		byDigest[h.digest] = append(byDigest[h.digest], i)
+		byPath[h.Path] = append(byPath[h.Path], i)
 	}
-	picked := map[int]Hunk{}
-	var unknown []string
+	picked := map[int]bool{}
+	var unknown, ambiguous []string
 	for _, ref := range refs {
-		if h, ok := byID[ref]; ok {
-			picked[h.order] = h
+		if i, ok := byID[ref]; ok {
+			picked[i] = true
 			continue
 		}
-		if hs, ok := byPath[strings.TrimPrefix(ref, "./")]; ok {
-			for _, h := range hs {
-				picked[h.order] = h
+		if i, ok := atLine(all, byDigest, ref); ok {
+			picked[i] = true
+			continue
+		}
+		is, ok := byPath[ref]
+		if !ok {
+			is, ok = byPath[path.Clean(filepath.ToSlash(ref))]
+		}
+		if ok {
+			for _, i := range is {
+				picked[i] = true
 			}
+			continue
+		}
+		if len(byDigest[ref]) > 1 {
+			var copies []string
+			for _, i := range byDigest[ref] {
+				copies = append(copies, all[i].ID)
+			}
+			ambiguous = append(ambiguous, fmt.Sprintf("%s (now %s)", ref, strings.Join(copies, ", ")))
 			continue
 		}
 		unknown = append(unknown, ref)
 	}
+	var problems []string
 	if len(unknown) > 0 {
-		return nil, fmt.Errorf("no hunk or changed file matches %s; run `carya hunks` for current IDs", strings.Join(unknown, ", "))
+		problems = append(problems, "no hunk or changed file matches "+strings.Join(unknown, ", "))
+	}
+	if len(ambiguous) > 0 {
+		problems = append(problems, "identical hunks share the ID "+strings.Join(ambiguous, "; "))
+	}
+	if len(problems) > 0 {
+		return nil, fmt.Errorf("%s; run `carya hunks` for current IDs", strings.Join(problems, "; "))
 	}
 	out := make([]Hunk, 0, len(picked))
-	for _, h := range picked {
-		out = append(out, h)
+	for i := range all {
+		if picked[i] {
+			out = append(out, all[i])
+		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].order < out[j].order })
 	return out, nil
+}
+
+// atLine resolves an ID of the form digest@line to the change with that
+// content starting at that line of the working tree file.
+func atLine(all []Hunk, byDigest map[string][]int, ref string) (int, bool) {
+	digest, at, ok := strings.Cut(ref, "@")
+	line, err := strconv.Atoi(at)
+	if !ok || err != nil {
+		return 0, false
+	}
+	for _, i := range byDigest[digest] {
+		if all[i].line == line {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // Patch joins hunks into one patch that applies to HEAD.

@@ -603,6 +603,39 @@ func TestIDsUniqueForIdenticalHunks(t *testing.T) {
 			t.Errorf("Select(%s) = %+v, %v", h.ID, sel, err)
 		}
 	}
+	// An ID listed while one copy was unique now matches both: refuse it
+	// rather than guess.
+	digest, _, _ := strings.Cut(hs[0].ID, "@")
+	if digest == hs[0].ID {
+		t.Fatalf("identical hunks got plain IDs: %v", ids(hs))
+	}
+	if sel, err := Select(hs, []string{digest}); err == nil || !strings.Contains(err.Error(), hs[1].ID) {
+		t.Errorf("Select(%s) = %v, %v; want an error naming both copies", digest, ids(sel), err)
+	}
+}
+
+func TestIDsOfIdenticalHunksStayValidWhenOneIsCommitted(t *testing.T) {
+	r := identicalHunksRepo(t)
+	hs := r.list()
+	first, second, other := hs[0], hs[1], hs[2]
+
+	r.commit("first copy", first.ID)
+	after := r.list()
+	if len(after) != 2 {
+		t.Fatalf("want 2 hunks left, got %+v", after)
+	}
+	// The second copy's ID from before still names it.
+	sel, err := Select(after, []string{second.ID})
+	if err != nil || len(sel) != 1 || sel[0].Diff != after[0].Diff {
+		t.Fatalf("Select(%s) after committing %s = %+v, %v", second.ID, first.ID, sel, err)
+	}
+	if after[1].ID != other.ID {
+		t.Errorf("other hunk's ID changed from %s to %s", other.ID, after[1].ID)
+	}
+	r.commit("second copy", second.ID)
+	if got := r.blob("HEAD", "f.txt"); strings.Count(got, "CHANGED") != 2 || strings.Contains(got, "OTHER") {
+		t.Errorf("f.txt in HEAD:\n%s", got)
+	}
 }
 
 func TestSelect(t *testing.T) {
