@@ -56,6 +56,17 @@ func hook(t *testing.T, event string, input map[string]any, opts HookOptions) st
 	return out.String()
 }
 
+func TestToolsHintIsOneLineNamingTheCommands(t *testing.T) {
+	if strings.Count(toolsHint, "\n") != 1 || !strings.HasSuffix(toolsHint, "\n") {
+		t.Fatalf("the hint is added to every session, so it must be one line: %q", toolsHint)
+	}
+	for _, cmd := range []string{"`carya related <file>`", "`carya why <file>[:line]`", "`carya hunks`", "`carya commit -m <msg> <ids|files>`"} {
+		if !strings.Contains(toolsHint, cmd) {
+			t.Errorf("the hint should name %s: %q", cmd, toolsHint)
+		}
+	}
+}
+
 func TestClaudeHooksWarnBeforeEditingAPeersFile(t *testing.T) {
 	isolate(t)
 	repo := newRepo(t)
