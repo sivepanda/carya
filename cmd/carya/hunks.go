@@ -23,7 +23,9 @@ var hunksCmd = &cobra.Command{
 hunks with short IDs. Commit any grouping of them with
 'carya commit -m <message> <id or file>...'; the rest stays uncommitted.
 IDs come from each hunk's content, so they stay the same while you commit
-other hunks.`,
+other hunks. After the list come files that probably belong in one commit:
+code with its tests, manifests with their lock files, and files the history
+says change together.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		root := mustRepo().RootPath()
 		all, err := hunks.List(root)
@@ -36,11 +38,15 @@ other hunks.`,
 				fail(err)
 			}
 		}
+		groups := hunks.Suggest(root, shown)
 		if hunksJSON {
 			if shown == nil {
 				shown = []hunks.Hunk{}
 			}
-			printJSON(shown)
+			if groups == nil {
+				groups = []hunks.Group{}
+			}
+			printJSON(map[string]any{"hunks": shown, "groups": groups})
 			return
 		}
 		if len(shown) == 0 {
@@ -48,8 +54,22 @@ other hunks.`,
 			return
 		}
 		printHunks(shown, hunksDiff)
+		printGroups(shown, groups)
 		fmt.Println(`Commit some with: carya commit -m "<message>" <id or file>...`)
 	},
+}
+
+func printGroups(hs []hunks.Hunk, groups []hunks.Group) {
+	if len(groups) == 0 {
+		return
+	}
+	fmt.Println("Files that probably belong in one commit:")
+	for _, g := range groups {
+		fmt.Printf("  %s  (%s)\n", strings.Join(g.Files, " "), g.Reason)
+	}
+	if rest := hunks.Ungrouped(hs, groups); len(rest) > 0 {
+		fmt.Printf("  ungrouped: %s\n", strings.Join(rest, " "))
+	}
 }
 
 func printHunks(hs []hunks.Hunk, withDiff bool) {
@@ -117,7 +137,7 @@ your identity and the repository's commit hooks apply.`,
 
 func init() {
 	hunksCmd.Flags().BoolVar(&hunksDiff, "diff", false, "show each hunk's diff")
-	hunksCmd.Flags().BoolVar(&hunksJSON, "json", false, "print the hunks as JSON")
+	hunksCmd.Flags().BoolVar(&hunksJSON, "json", false, "print the hunks and suggested groups as JSON")
 	commitCmd.Flags().StringVarP(&commitMsg, "message", "m", "", "commit message")
 	commitCmd.Flags().BoolVar(&commitDryRun, "dry-run", false, "show what would be committed")
 	rootCmd.AddCommand(hunksCmd, commitCmd)
