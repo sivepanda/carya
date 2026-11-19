@@ -55,6 +55,16 @@ This merges every published state (each agent's and yours) onto the default bran
 
 States stay until someone removes them, so agents that went away leave theirs behind. `carya states` lists every state with its age and whether its work has already landed on the default branch, and `carya states prune` deletes the stale ones: landed work, and states not republished for a week (`--older-than` to change it, `--user` to name them, `--dry-run` to look first). It only deletes your local copies unless you pass `--remote`, which deletes them on `origin` for everyone.
 
+Agents can also ask the repository's history what they would otherwise need a summary for, only when they need it:
+
+```bash
+carya related internal/git/refs.go   # files that usually change in the same commit
+carya why internal/git/refs.go       # recent commits that changed it, and who is changing it now
+carya why internal/git/refs.go:42    # the commit that last changed line 42
+```
+
+The history is indexed incrementally into `.carya/chunks.db` the first time you ask, in milliseconds for small repositories. Bulk commits of more than 40 files are left out of `related`. `why` shows each commit's subject, plus a `Carya-Reason:` trailer if a commit has one (Carya reads it but never writes it). Both take `--json`, and the session-start hook mentions them in one line.
+
 Use `carya check <file>` to see other agents' unfinished changes to a file yourself. Agents in worktrees of the same repository see each other with no network; with an `origin` remote, states are also pushed to `refs/carya/*`, which does not show up as branches on GitHub. Cloud sessions don't share state yet.
 
 ## Planned Components
