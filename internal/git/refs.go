@@ -90,6 +90,54 @@ func (r *RefManager) PublishUserState(userID, treeHash string) (UserRef, error) 
 	return UserRef{UserID: userID, Commit: commit, TreeHash: treeHash, BaseCommit: base}, nil
 }
 
+// CommitTree writes a commit for tree with the given parents, authored by
+// carya, without touching any ref.
+func (r *RefManager) CommitTree(tree, message string, parents ...string) (string, error) {
+	args := []string{"commit-tree", tree, "-m", message}
+	for _, p := range parents {
+		args = append(args, "-p", p)
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.repoPath
+	cmd.Env = caryaCommitEnv()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("commit-tree: %w\n%s", err, out)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// UpdateRef points ref at commit.
+func (r *RefManager) UpdateRef(ref, commit string) error {
+	cmd := exec.Command("git", "update-ref", ref, commit)
+	cmd.Dir = r.repoPath
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("update-ref %s: %w\n%s", ref, err, out)
+	}
+	return nil
+}
+
+// DefaultBranch returns the ref that work is integrated into: the remote's
+// default branch when origin/HEAD is known, else a local main or master,
+// else HEAD.
+func (r *RefManager) DefaultBranch() string {
+	cmd := exec.Command("git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+	cmd.Dir = r.repoPath
+	if out, err := cmd.Output(); err == nil {
+		if ref := strings.TrimSpace(string(out)); ref != "" {
+			return ref
+		}
+	}
+	for _, candidate := range []string{"origin/main", "origin/master", "main", "master"} {
+		check := exec.Command("git", "rev-parse", "--verify", "--quiet", candidate+"^{commit}")
+		check.Dir = r.repoPath
+		if check.Run() == nil {
+			return candidate
+		}
+	}
+	return "HEAD"
+}
+
 // headCommit returns the commit HEAD points at, or "" on an unborn branch.
 func (r *RefManager) headCommit() (string, error) {
 	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", "HEAD^{commit}")

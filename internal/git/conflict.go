@@ -79,6 +79,13 @@ func (c *ConflictPredictor) stateCommit(state UserRef, fallbackBase, label strin
 	return c.predictionCommit(state.TreeHash, strings.TrimSpace(string(parent)), label)
 }
 
+// MergeCommits merges two commits in memory with `git merge-tree`, letting
+// git find their merge base. Nothing in the repository or working tree
+// changes. On a clean merge the report's MergedTreeHash is the result.
+func (c *ConflictPredictor) MergeCommits(left, right string) (*ConflictReport, error) {
+	return c.mergeTree(left, right)
+}
+
 func (c *ConflictPredictor) mergeTree(left, right string) (*ConflictReport, error) {
 	cmd := exec.Command("git", "merge-tree", "--write-tree", left, right)
 	cmd.Dir = c.repoPath
