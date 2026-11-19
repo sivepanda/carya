@@ -63,10 +63,14 @@ func (c *Checker) ForPaths(me string, mine git.UserRef, paths []string) ([]Chang
 		if peer.UserID == me {
 			continue
 		}
-		base := peer.Base(head)
-		if base == "" {
+		// A state without a recorded base (from before Carya recorded one)
+		// can only be compared against our HEAD, which turns everything
+		// changed since into their "changes". Leave those out; `carya
+		// states` still lists them so they can be pruned.
+		if !peer.HasBase() {
 			continue
 		}
+		base := peer.BaseCommit
 		touched, err := c.changedPaths(base, peer.TreeHash, paths)
 		if err != nil || len(touched) == 0 {
 			continue
@@ -115,21 +119,16 @@ type State struct {
 // Overview lists the peers whose published states change anything, with the
 // files they change, ordered by most recently published.
 func (c *Checker) Overview(me string) ([]State, error) {
-	head, err := c.refs.ResolveRef("HEAD")
-	if err != nil {
-		head = ""
-	}
 	refs, err := c.refs.ListUserRefs()
 	if err != nil {
 		return nil, err
 	}
 	var states []State
 	for _, peer := range refs {
-		base := peer.Base(head)
-		if peer.UserID == me || base == "" {
+		if peer.UserID == me || !peer.HasBase() {
 			continue
 		}
-		touched, err := c.changedPaths(base, peer.TreeHash, nil)
+		touched, err := c.changedPaths(peer.BaseCommit, peer.TreeHash, nil)
 		if err != nil || len(touched) == 0 {
 			continue
 		}

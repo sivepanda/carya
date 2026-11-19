@@ -113,9 +113,10 @@ func TestRefreshMeasuresTeammatesAgainstTheirOwnBase(t *testing.T) {
 	}
 }
 
-// A teammate ref from before bases were recorded is still read, using the
-// local HEAD as its base as before.
-func TestRefreshFallsBackToHEADForLegacyStates(t *testing.T) {
+// A teammate ref from before bases were recorded can only be compared with
+// the local HEAD, which makes every newer file look deleted by them. Such
+// states are left out of reports.
+func TestRefreshIgnoresStatesWithoutABase(t *testing.T) {
 	repo := t.TempDir()
 	gitIn(t, repo, nil, "", "init", "-q")
 	commit(t, repo, map[string]string{"shared.txt": "shared\n"}, "c1")
@@ -127,11 +128,7 @@ func TestRefreshFallsBackToHEADForLegacyStates(t *testing.T) {
 	if err := a.Refresh(); err != nil {
 		t.Fatal(err)
 	}
-	r := a.ReportForFile("shared.txt")
-	if r == nil || len(r.Teammates) != 1 || r.Teammates[0].UserID != "old" {
-		t.Fatalf("expected the legacy teammate on shared.txt, got %+v", r)
-	}
-	if r.Teammates[0].IsConflict {
-		t.Fatal("no published state of mine, so no conflict should be predicted")
+	if r := a.ReportForFile("shared.txt"); r != nil {
+		t.Fatalf("a state without a base should not be reported, got %+v", r.Teammates)
 	}
 }

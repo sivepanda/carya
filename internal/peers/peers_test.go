@@ -105,3 +105,39 @@ func TestForPathsReportsPeerChangesAndConflicts(t *testing.T) {
 		t.Fatalf("unexpected overview: %+v", overview)
 	}
 }
+
+func TestBaselessStatesAndDeletionsStayQuiet(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-q")
+	write(t, repo, map[string]string{"old.txt": "old\n", "keep.txt": "keep\n"})
+	gitRun(t, repo, "add", "-A")
+	gitRun(t, repo, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "-q", "-m", "init")
+
+	// A bare-tree state from an old carya, made before new.txt existed.
+	tree := gitRun(t, repo, "rev-parse", "HEAD^{tree}")
+	gitRun(t, repo, "update-ref", git.UserTreeRefPath("ancient"), tree)
+	write(t, repo, map[string]string{"new.txt": "new\n"})
+	gitRun(t, repo, "add", "-A")
+	gitRun(t, repo, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "-q", "-m", "add new")
+
+	// A real peer deletes old.txt.
+	gitRun(t, repo, "rm", "-q", "old.txt")
+	publish(t, repo, "bob", map[string]string{})
+	gitRun(t, repo, "checkout", "-q", "HEAD", "--", ".")
+
+	c := NewChecker(repo)
+	changes, err := c.ForPaths("me", git.UserRef{}, []string{"new.txt", "old.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || changes[0].UserID != "bob" || changes[0].Status != "D" {
+		t.Fatalf("only bob's deletion should be reported, got %+v", changes)
+	}
+	summary := Summary(changes, time.Now())
+	if !strings.Contains(summary, "deleted old.txt") || strings.Contains(summary, "-old") {
+		t.Fatalf("a deletion should be one line, not the file's diff:\n%s", summary)
+	}
+	if overview, _ := c.Overview("me"); len(overview) != 1 || overview[0].UserID != "bob" {
+		t.Fatalf("the baseless state should not be in the overview: %+v", overview)
+	}
+}
